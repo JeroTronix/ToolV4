@@ -1,0 +1,2372 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+# ══════════════════════════════════════════════════════════════════════════
+#  jero v4.0  ·  navaja osint de terminal  ·  /plont
+#
+#  single-file · solo libreria estandar (extras opcionales: phonenumbers,
+#  cryptography) · ip · phone · user · mail · domain · whois · dns · tls ·
+#  grab · spam · hash · dork · mac · config · doctor
+#
+#  fuentes keyless: internetdb.shodan.io · otx.alienvault.com ·
+#  api.stopforumspam.org · urlscan.io · crt.sh · rdap.org · dns.google ·
+#  origin.asn.cymru.com · ipwho.is · ipapi.is · ip-api.com · emailrep.io ·
+#  disify.com · gravatar · hibp unifiedsearch · hashlookup.circl.lu ·
+#  api.bgpview.io · hackertarget · macvendors
+#
+#  enfoques tomados de: sundowndev/phoneinfoga · megadose/ignorant ·
+#  megadose/holehe · soxoj/maigret · sherlock-project/sherlock ·
+#  p1ngul1n0/blackbird · cipher387/osint_stuff_tool_collection
+#
+#  uso educativo y auditoria autorizada.
+# ══════════════════════════════════════════════════════════════════════════
+
+import base64
+import hashlib
+import hmac
+import json
+import os
+import random
+import re
+import shutil
+import smtplib
+import socket
+import ssl
+import subprocess
+import sys
+import threading
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
+from email.message import EmailMessage
+from email.utils import make_msgid
+
+try:
+    import phonenumbers
+    from phonenumbers import carrier as pn_carrier
+    from phonenumbers import geocoder as pn_geo
+    from phonenumbers import timezone as pn_tz
+    HAY_FONO = True
+except Exception:
+    HAY_FONO = False
+
+try:
+    from cryptography.fernet import Fernet, InvalidToken
+    HAY_CRIPTO = True
+except Exception:
+    HAY_CRIPTO = False
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  CONSTANTES
+# ══════════════════════════════════════════════════════════════════════════
+
+APP = "jero"
+VER = "4.0.0"
+AUTOR = "plont"
+URL_ACTUALIZACION = ("https://raw.githubusercontent.com/rawfilejson/"
+                     "awesome-osint-arsenal/main/jero.py")
+
+HOME = os.path.expanduser("~")
+DIR_BASE = os.environ.get("JERO_HOME") or os.path.join(HOME, ".jero")
+RUTA_CONFIG = os.path.join(DIR_BASE, "config.json")
+RUTA_CLAVE = os.path.join(DIR_BASE, "clave.bin")
+RUTA_HISTORIAL = os.path.join(DIR_BASE, "historial.log")
+RUTA_DOSSIERS = os.path.join(DIR_BASE, "dossiers")
+RUTA_CACHE = os.path.join(DIR_BASE, "cache")
+
+TIMEOUT = 9
+HILOS = 24
+LARGO_MAX = 400000
+
+UA_POOL = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
+    "(KHTML, like Gecko) Version/17.6 Safari/605.1.15",
+    "Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_6 like Mac OS X) AppleWebKit/605.1.15 "
+    "(KHTML, like Gecko) Version/17.6 Mobile/15E148 Safari/604.1",
+)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  COLOR
+# ══════════════════════════════════════════════════════════════════════════
+
+class Color:
+    activo = True
+    tema = "noche"
+    _borde = "\033[38;5;67m"
+    _valor = "\033[38;5;252m"
+    _etiqueta = "\033[38;5;109m"
+    _ok = "\033[38;5;71m"
+    _aviso = "\033[38;5;179m"
+    _malo = "\033[38;5;167m"
+    _info = "\033[38;5;103m"
+    _tenue = "\033[38;5;240m"
+    _titulo = "\033[1;38;5;110m"
+
+    PALETAS = {
+        "noche": ("67", "252", "109", "71", "179", "167", "103", "240", "110"),
+        "hielo": ("45", "253", "117", "80", "222", "204", "152", "243", "81"),
+        "matrix": ("28", "120", "40", "46", "178", "160", "34", "22", "40"),
+        "ambar": ("136", "223", "179", "107", "214", "166", "138", "94", "179"),
+        "mono": ("240", "255", "245", "255", "255", "255", "245", "240", "255"),
+    }
+
+    @classmethod
+    def aplicar(cls, nombre):
+        p = cls.PALETAS.get(str(nombre).lower())
+        if not p:
+            return False
+        cls.tema = str(nombre).lower()
+        (cls._borde, cls._valor, cls._etiqueta, cls._ok, cls._aviso,
+         cls._malo, cls._info, cls._tenue, cls._titulo) = ["\033[38;5;%sm" % c for c in p]
+        return True
+
+    @classmethod
+    def _w(cls, cod, txt):
+        if not cls.activo or os.environ.get("NO_COLOR"):
+            return str(txt)
+        return cod + str(txt) + "\033[0m"
+
+    @classmethod
+    def borde(cls, t): return cls._w(cls._borde, t)
+    @classmethod
+    def valor(cls, t): return cls._w(cls._valor, t)
+    @classmethod
+    def etiqueta(cls, t): return cls._w(cls._etiqueta, t)
+    @classmethod
+    def ok(cls, t): return cls._w(cls._ok, t)
+    @classmethod
+    def aviso(cls, t): return cls._w(cls._aviso, t)
+    @classmethod
+    def malo(cls, t): return cls._w(cls._malo, t)
+    @classmethod
+    def info(cls, t): return cls._w(cls._info, t)
+    @classmethod
+    def tenue(cls, t): return cls._w(cls._tenue, t)
+    @classmethod
+    def titulo(cls, t): return cls._w(cls._titulo, t)
+
+
+def ancho(texto):
+    limpio = re.sub(r"\033\[[0-9;]*m", "", str(texto))
+    return len(limpio)
+
+
+def pad(texto, n):
+    return str(texto) + " " * max(0, n - ancho(texto))
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  CIFRADO DE CREDENCIALES
+# ══════════════════════════════════════════════════════════════════════════
+
+class Cripto:
+    """Fernet si hay cryptography; si no, XOR+HMAC con la misma clave."""
+
+    @staticmethod
+    def _clave():
+        os.makedirs(DIR_BASE, exist_ok=True)
+        if not os.path.exists(RUTA_CLAVE):
+            semilla = os.urandom(32)
+            with open(RUTA_CLAVE, "wb") as f:
+                f.write(semilla)
+            try:
+                os.chmod(RUTA_CLAVE, 0o600)
+            except Exception:
+                pass
+        with open(RUTA_CLAVE, "rb") as f:
+            return f.read()
+
+    @classmethod
+    def cifrar(cls, texto):
+        if texto in (None, ""):
+            return ""
+        bruto = str(texto).encode()
+        semilla = cls._clave()
+        if HAY_CRIPTO:
+            try:
+                return "f:" + Fernet(base64.urlsafe_b64encode(semilla[:32])).encrypt(bruto).decode()
+            except Exception:
+                pass
+        flujo = (semilla * (len(bruto) // 32 + 1))[:len(bruto)]
+        cuerpo = bytes(a ^ b for a, b in zip(bruto, flujo))
+        mac = hmac.new(semilla, cuerpo, hashlib.sha256).hexdigest()[:32]
+        return "x:%s:%s" % (base64.b64encode(cuerpo).decode(), mac)
+
+    @classmethod
+    def descifrar(cls, dato):
+        if not dato:
+            return ""
+        dato = str(dato)
+        semilla = cls._clave()
+        if dato.startswith("f:") and HAY_CRIPTO:
+            try:
+                return Fernet(base64.urlsafe_b64encode(semilla[:32])).decrypt(
+                    dato[2:].encode()).decode()
+            except (InvalidToken, Exception):
+                return ""
+        if dato.startswith("x:"):
+            try:
+                _, b64, mac = dato.split(":", 2)
+                cuerpo = base64.b64decode(b64)
+                if hmac.new(semilla, cuerpo, hashlib.sha256).hexdigest()[:32] != mac:
+                    return ""
+                flujo = (semilla * (len(cuerpo) // 32 + 1))[:len(cuerpo)]
+                return bytes(a ^ b for a, b in zip(cuerpo, flujo)).decode()
+            except Exception:
+                return ""
+        return dato
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  CONFIG
+# ══════════════════════════════════════════════════════════════════════════
+
+POR_DEFECTO = {
+    "tema": "noche",
+    "animacion": True,
+    "json": False,
+    "archivar": True,
+    "timeout": 9,
+    "hilos": 24,
+    "reintentos": 2,
+    "ua_rotativo": True,
+    "spam_host": "smtp.gmail.com",
+    "spam_puerto": 587,
+    "spam_ssl": False,
+    "spam_inicio": True,
+    "spam_usuario": "",
+    "spam_clave": "",
+    "spam_de": "",
+    "spam_asunto": "Revision de seguridad",
+    "spam_cuerpo": (
+        "Hola,\n\nEstamos revisando la seguridad de los accesos de la empresa "
+        "y necesitamos que valides tu cuenta.\n\n{url}\n\nGracias."
+    ),
+    "spam_html": True,
+    "spam_pixel": True,
+    "vt_key": "",
+    "omkar_key": "",
+    "dorks_personalizados": [],
+}
+
+CLAVES_SECRETAS = ("spam_clave", "vt_key", "omkar_key")
+
+
+class Config:
+    def __init__(self):
+        self.datos = dict(POR_DEFECTO)
+        self._lock = threading.Lock()
+        self.cargar()
+
+    def cargar(self):
+        if not os.path.exists(RUTA_CONFIG):
+            return
+        try:
+            with open(RUTA_CONFIG, "r", encoding="utf-8") as f:
+                guardado = json.load(f)
+        except Exception:
+            return
+        for k, v in guardado.items():
+            if k in POR_DEFECTO:
+                if k in CLAVES_SECRETAS and v:
+                    self.datos[k] = Cripto.descifrar(v) or v
+                else:
+                    self.datos[k] = v
+        if not Color.aplicar(self.datos.get("tema", "noche")):
+            Color.aplicar("noche")
+
+    def guardar(self):
+        with self._lock:
+            os.makedirs(DIR_BASE, exist_ok=True)
+            salida = {}
+            for k, v in self.datos.items():
+                if k in CLAVES_SECRETAS and v:
+                    salida[k] = Cripto.cifrar(v)
+                else:
+                    salida[k] = v
+            temporal = RUTA_CONFIG + ".tmp"
+            with open(temporal, "w", encoding="utf-8") as f:
+                json.dump(salida, f, ensure_ascii=False, indent=2)
+            os.replace(temporal, RUTA_CONFIG)
+            try:
+                os.chmod(RUTA_CONFIG, 0o600)
+            except Exception:
+                pass
+
+    def get(self, clave, defecto=None):
+        return self.datos.get(clave, POR_DEFECTO.get(clave, defecto))
+
+    def set(self, clave, valor):
+        if clave not in POR_DEFECTO:
+            return False, "clave desconocida"
+        tipo = type(POR_DEFECTO[clave])
+        try:
+            if tipo is bool:
+                if str(valor).lower() in ("1", "si", "sí", "true", "on", "yes"):
+                    valor = True
+                elif str(valor).lower() in ("0", "no", "false", "off"):
+                    valor = False
+                else:
+                    return False, "usa si/no"
+            elif tipo is int:
+                valor = int(valor)
+            else:
+                valor = str(valor)
+        except Exception:
+            return False, "valor invalido"
+        self.datos[clave] = valor
+        if clave == "tema":
+            Color.aplicar(valor)
+        return True, "ok"
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  UTILIDADES
+# ══════════════════════════════════════════════════════════════════════════
+
+def ahora():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def marca_tiempo():
+    return datetime.now().strftime("%Y%m%d_%H%M%S")
+
+
+def es_ip(t):
+    try:
+        socket.inet_aton(str(t))
+        return str(t).count(".") == 3
+    except Exception:
+        return False
+
+
+def es_ipv6(t):
+    try:
+        socket.inet_pton(socket.AF_INET6, str(t))
+        return True
+    except Exception:
+        return False
+
+
+def resolver(host):
+    if es_ip(host):
+        return str(host)
+    try:
+        return socket.gethostbyname(str(host))
+    except Exception:
+        return None
+
+
+def es_privada(ip):
+    p = str(ip).split(".")
+    if len(p) != 4:
+        return False
+    try:
+        a, b = int(p[0]), int(p[1])
+    except ValueError:
+        return False
+    return (a in (10, 127) or (a == 192 and b == 168)
+            or (a == 172 and 16 <= b <= 31) or (a == 169 and b == 254))
+
+
+def dominio_limpio(t):
+    t = str(t).strip().lower()
+    t = re.sub(r"^https?://", "", t)
+    t = t.split("/")[0].split("?")[0]
+    return t
+
+
+def correo_valido(t):
+    return bool(re.fullmatch(r"[^@\s]+@[^@\s]+\.[A-Za-z]{2,}", str(t).strip()))
+
+
+def ua():
+    return random.choice(UA_POOL)
+
+
+def paralelo(tareas, limite=HILOS):
+    salida = {k: None for k in tareas}
+    if not tareas:
+        return salida
+    with ThreadPoolExecutor(max_workers=min(limite, len(tareas))) as ex:
+        futuros = {n: ex.submit(f) for n, f in tareas.items()}
+        for n, f in futuros.items():
+            try:
+                salida[n] = f.result(timeout=35)
+            except Exception:
+                salida[n] = None
+    return salida
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  RED
+# ══════════════════════════════════════════════════════════════════════════
+
+class Red:
+    def __init__(self, config):
+        self.config = config
+        self._cache = {}
+        self._lock = threading.Lock()
+
+    def _cab(self, extra=None):
+        cab = {"User-Agent": ua(), "Accept": "*/*",
+               "Accept-Language": "es,en;q=0.8",
+               "Accept-Encoding": "identity", "Connection": "close"}
+        if extra:
+            cab.update(extra)
+        return cab
+
+    def get(self, url, timeout=None, headers=None, datos=None, metodo="GET",
+            reintentos=None, cache=True):
+        if cache:
+            with self._lock:
+                if url in self._cache:
+                    return self._cache[url]
+        intentos = max(1, int(reintentos if reintentos is not None
+                              else self.config.get("reintentos", 2)))
+        ultimo = (None, "")
+        for i in range(intentos):
+            try:
+                req = urllib.request.Request(url, headers=self._cab(headers),
+                                             data=datos, method=metodo)
+                with urllib.request.urlopen(
+                        req, timeout=timeout or self.config.get("timeout", 9)) as r:
+                    cuerpo = r.read(LARGO_MAX).decode("utf-8", "replace")
+                    res = (r.getcode(), cuerpo)
+                    break
+            except urllib.error.HTTPError as e:
+                try:
+                    cuerpo = e.read(200000).decode("utf-8", "replace")
+                except Exception:
+                    cuerpo = ""
+                if e.code not in (429, 500, 502, 503, 504):
+                    res = (e.code, cuerpo)
+                    break
+                ultimo = (e.code, cuerpo)
+            except Exception as e:
+                ultimo = (None, str(e))
+            time.sleep(0.35 * (i + 1) + random.random() * 0.3)
+        else:
+            res = ultimo
+        if cache and res[0] == 200:
+            with self._lock:
+                self._cache[url] = res
+        return res
+
+    def json(self, url, **kw):
+        code, cuerpo = self.get(url, **kw)
+        if not cuerpo:
+            return None
+        try:
+            return json.loads(cuerpo)
+        except Exception:
+            return None
+
+    def limpiar(self):
+        with self._lock:
+            self._cache.clear()
+
+
+def txt_dns(nombre, tipo="TXT"):
+    d = Red(Config.__new__(Config)).json(
+        "https://dns.google/resolve?name=%s&type=%s"
+        % (urllib.parse.quote(nombre), tipo))
+    return d
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  UI
+# ══════════════════════════════════════════════════════════════════════════
+
+class UI:
+    def __init__(self, config):
+        self.config = config
+        self.silencio = False
+
+    def _p(self, marca, texto):
+        if self.silencio:
+            return
+        print(marca + " " + str(texto))
+
+    def crudo(self, texto=""):
+        if not self.silencio:
+            print(texto)
+
+    def escribir(self, texto=""):
+        self.crudo(texto)
+
+    def sep(self, caracter="─", largo=62):
+        self.crudo(Color.tenue(caracter * largo))
+
+    def titulo(self, texto, estilo=None):
+        self.crudo()
+        self.crudo(Color.titulo("┌─ " + str(texto)))
+        self.crudo(Color.borde("└" + "─" * min(len(str(texto)) + 3, 62)))
+
+    def sub(self, texto):
+        self.crudo("  " + Color.etiqueta("▪ " + str(texto)))
+
+    def campo(self, etiqueta, valor):
+        if valor in (None, "", [], {}):
+            return
+        self.crudo("  " + Color.etiqueta(pad(str(etiqueta), 18) + "│ ")
+                   + Color.valor(valor))
+
+    def lista(self, etiqueta, valores, tope=15):
+        valores = [v for v in (valores or []) if v]
+        if not valores:
+            return
+        self.sub(etiqueta)
+        for v in valores[:tope]:
+            self.crudo("  " + Color.borde("├─ ") + Color.valor(v))
+
+    def enlace(self, etiqueta, url):
+        self.crudo("  " + Color.etiqueta(pad(str(etiqueta), 16)) + Color.info(url))
+
+    def ok(self, texto): self._p(Color.ok("[+]"), texto)
+    def malo(self, texto): self._p(Color.malo("[-]"), texto)
+    def aviso(self, texto): self._p(Color.aviso("[!]"), texto)
+    def info(self, texto): self._p(Color.info("[*]"), texto)
+
+    def mapa(self, lat, lon):
+        if lat and lon:
+            self.crudo("  " + Color.etiqueta(pad("mapa", 18) + "│ ")
+                       + Color.info("https://www.google.com/maps?q=%s,%s" % (lat, lon)))
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  ANIMACION
+# ══════════════════════════════════════════════════════════════════════════
+
+class Anim:
+    MARCOS = {
+        "radar": "▁▂▃▄▅▆▇█▇▆▅▄▃▂",
+        "ondas": "·∙•●•∙·",
+        "reticula": "◜◝◞◟",
+        "sobre": "▱▰▱▰",
+        "arbol": "▹▸▹▸",
+        "remolino": "◐◓◑◒",
+    }
+
+    def __init__(self, config, ui):
+        self.config = config
+        self.ui = ui
+        self.activo = bool(config.get("animacion", True)) and sys.stdout.isatty()
+
+    def esperar(self, etiqueta, fn, estilo="radar", minimo=0.25):
+        if not self.activo or self.ui.silencio:
+            self.ui.info(etiqueta)
+            return fn()
+        marcos = self.MARCOS.get(estilo, self.MARCOS["radar"])
+        fin = threading.Event()
+        resultado = {}
+
+        def obrero():
+            try:
+                resultado["v"] = fn()
+            except Exception as e:
+                resultado["e"] = e
+            finally:
+                fin.set()
+
+        h = threading.Thread(target=obrero, daemon=True)
+        inicio = time.time()
+        h.start()
+        i = 0
+        while not fin.is_set():
+            self.ui.crudo("\r  " + Color.info(marcos[i % len(marcos)] + " ")
+                          + Color.etiqueta(etiqueta) + "   ")
+            i += 1
+            time.sleep(0.08)
+        while time.time() - inicio < minimo:
+            time.sleep(0.02)
+        self.ui.crudo("\r" + " " * (ancho(etiqueta) + 8) + "\r")
+        if "e" in resultado:
+            self.ui.malo("%s: %s" % (etiqueta, resultado["e"]))
+            return None
+        return resultado.get("v")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  CONTEXTO
+# ══════════════════════════════════════════════════════════════════════════
+
+class Contexto:
+    def __init__(self, config, ui, red, anim, flags):
+        self.config = config
+        self.ui = ui
+        self.red = red
+        self.anim = anim
+        self.flags = flags
+
+    def archivar(self, tipo, objetivo, datos):
+        if not self.config.get("archivar", True) or self.flags.get("no_archivo"):
+            return
+        try:
+            os.makedirs(RUTA_DOSSIERS, exist_ok=True)
+            nombre = "%s_%s_%s.json" % (
+                marca_tiempo(), tipo, re.sub(r"\W+", "_", str(objetivo))[:50])
+            ruta = os.path.join(RUTA_DOSSIERS, nombre)
+            with open(ruta, "w", encoding="utf-8") as f:
+                json.dump({"tipo": tipo, "objetivo": str(objetivo),
+                           "fecha": ahora(), "datos": datos},
+                          f, ensure_ascii=False, indent=2)
+            self.ui.ok("dossier -> " + ruta)
+        except Exception as e:
+            self.ui.aviso("no se pudo archivar: %s" % e)
+
+    def emitir(self, datos):
+        if self.flags.get("json") or self.config.get("json"):
+            print(json.dumps(datos, ensure_ascii=False, indent=2))
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  TABLAS DE APOYO
+# ══════════════════════════════════════════════════════════════════════════
+
+PREFIJOS = {
+ "34": {"91": "Madrid", "93": "Barcelona", "94": "Bizkaia", "95": "Sevilla",
+        "96": "Valencia", "961": "Valencia", "962": "Valencia", "963": "Valencia",
+        "965": "Alicante", "968": "Murcia", "971": "Baleares", "981": "A Coruna",
+        "985": "Asturias", "986": "Pontevedra", "987": "Leon", "988": "Ourense",
+        "951": "Malaga", "952": "Malaga", "953": "Jaen", "954": "Sevilla",
+        "955": "Sevilla", "956": "Cadiz", "957": "Cordoba", "958": "Granada",
+        "959": "Huelva", "922": "Tenerife", "928": "Las Palmas", "976": "Zaragoza",
+        "977": "Tarragona", "972": "Girona", "973": "Lleida", "923": "Salamanca",
+        "924": "Badajoz", "925": "Toledo", "926": "Ciudad Real", "927": "Caceres",
+        "942": "Cantabria", "943": "Gipuzkoa", "944": "Bizkaia", "945": "Araba",
+        "946": "Bizkaia", "947": "Burgos", "948": "Navarra", "949": "Guadalajara"},
+ "52": {"55": "CDMX", "33": "Guadalajara", "81": "Monterrey", "222": "Puebla",
+        "228": "Xalapa", "229": "Veracruz", "442": "Queretaro", "443": "Morelia",
+        "477": "Leon", "686": "Mexicali", "664": "Tijuana", "998": "Cancun",
+        "999": "Merida", "744": "Acapulco", "722": "Toluca", "871": "Torreon",
+        "844": "Saltillo", "618": "Durango", "312": "Colima", "961": "Tuxtla"},
+ "54": {"11": "CABA", "221": "La Plata", "223": "Mar del Plata", "261": "Mendoza",
+        "341": "Rosario", "351": "Cordoba", "381": "Tucuman", "385": "Sgo del Estero",
+        "387": "Salta", "299": "Neuquen", "342": "Santa Fe", "343": "Parana",
+        "264": "San Juan", "266": "San Luis", "383": "Catamarca", "388": "Jujuy"},
+ "57": {"601": "Bogota", "602": "Cali", "604": "Medellin", "605": "Barranquilla",
+        "607": "Bucaramanga", "608": "Cucuta", "606": "Pereira", "610": "Manizales",
+        "612": "Ibague", "614": "Villavicencio", "616": "Pasto"},
+ "56": {"2": "Santiago", "32": "Valparaiso", "33": "Quillota", "41": "Concepcion",
+        "45": "Temuco", "51": "La Serena", "52": "Copiapo", "55": "Antofagasta",
+        "57": "Iquique", "61": "Punta Arenas", "63": "Valdivia", "65": "Puerto Montt",
+        "71": "Talca", "73": "Linares", "75": "Curico"},
+ "51": {"1": "Lima", "44": "Trujillo", "54": "Arequipa", "84": "Cusco",
+        "64": "Huancayo", "65": "Iquitos", "74": "Chiclayo", "76": "Cajamarca"},
+ "55": {"11": "Sao Paulo", "21": "Rio de Janeiro", "31": "Belo Horizonte",
+        "41": "Curitiba", "51": "Porto Alegre", "61": "Brasilia", "71": "Salvador",
+        "81": "Recife", "85": "Fortaleza", "62": "Goiania", "91": "Belem",
+        "92": "Manaus", "48": "Florianopolis", "27": "Vitoria", "79": "Aracaju"},
+ "1": {"212": "Nueva York", "305": "Miami", "310": "Los Angeles", "312": "Chicago",
+       "404": "Atlanta", "415": "San Francisco", "617": "Boston", "702": "Las Vegas",
+       "713": "Houston", "786": "Miami", "202": "Washington DC", "214": "Dallas",
+       "303": "Denver", "206": "Seattle", "407": "Orlando", "619": "San Diego"},
+ "33": {"1": "Paris", "2": "Noroeste", "3": "Noreste", "4": "Sudeste", "5": "Sudoeste"},
+ "39": {"02": "Milan", "06": "Roma", "011": "Turin", "081": "Napoles",
+        "055": "Florencia", "051": "Bolonia", "041": "Venecia"},
+ "49": {"30": "Berlin", "40": "Hamburgo", "89": "Munich", "69": "Frankfurt",
+        "221": "Colonia", "711": "Stuttgart", "341": "Leipzig"},
+ "44": {"20": "Londres", "161": "Manchester", "121": "Birmingham", "131": "Edimburgo",
+        "113": "Leeds", "117": "Bristol", "191": "Newcastle"},
+}
+
+MNC = {
+ ("214", "07"): "Movistar ES", ("214", "01"): "Vodafone ES", ("214", "03"): "Orange ES",
+ ("214", "04"): "Yoigo", ("214", "05"): "Movistar ES", ("214", "06"): "Vodafone ES",
+ ("214", "16"): "Telecable", ("214", "18"): "Cableuropa", ("214", "19"): "Simyo",
+ ("214", "21"): "Jazztel", ("214", "22"): "Digi Mobil ES", ("214", "25"): "Lycamobile ES",
+ ("214", "26"): "Llamaya", ("214", "27"): "MasMovil",
+ ("334", "020"): "Telcel MX", ("334", "030"): "Movistar MX", ("334", "050"): "AT&T MX",
+ ("722", "310"): "Claro AR", ("722", "341"): "Personal AR", ("722", "070"): "Movistar AR",
+ ("732", "101"): "Claro CO", ("732", "102"): "Movistar CO", ("732", "103"): "Tigo CO",
+ ("730", "01"): "Entel CL", ("730", "02"): "Movistar CL", ("730", "03"): "Claro CL",
+ ("730", "07"): "WOM CL", ("724", "05"): "Claro BR", ("724", "06"): "Vivo BR",
+ ("724", "10"): "Tim BR", ("724", "31"): "Oi BR", ("716", "10"): "Claro PE",
+ ("716", "06"): "Movistar PE", ("716", "07"): "Entel PE", ("310", "260"): "T-Mobile US",
+ ("310", "410"): "AT&T US", ("311", "480"): "Verizon US", ("208", "01"): "Orange FR",
+ ("208", "10"): "SFR FR", ("208", "20"): "Bouygues FR", ("222", "10"): "Vodafone IT",
+ ("222", "01"): "TIM IT", ("222", "88"): "Wind IT", ("262", "01"): "Telekom DE",
+ ("262", "02"): "Vodafone DE", ("262", "03"): "O2 DE", ("234", "10"): "O2 UK",
+ ("234", "15"): "Vodafone UK", ("234", "30"): "EE UK", ("234", "20"): "3 UK",
+}
+
+SERVICIOS_TEL = (
+ ("instagram", "https://www.instagram.com/api/v1/web/accounts/web_create_ajax/attempt/"
+  "?email=&phone_number={e164}", "phone_number"),
+ ("telegram", "https://t.me/+{digitos}", "tgme_page_title"),
+ ("viber", "https://chats.viber.com/{digitos}", "viber"),
+ ("whatsapp", "https://api.whatsapp.com/send?phone={digitos}", ""),
+ ("snapchat", "https://app.snapchat.com/web/deeplink/snapcode?username={digitos}", ""),
+)
+
+SITIOS = [
+ ("github", "https://api.github.com/users/{u}", "404", None),
+ ("gitlab", "https://gitlab.com/api/v4/users?username={u}", "presente", '"username"'),
+ ("codeberg", "https://codeberg.org/api/v1/users/{u}", "404", None),
+ ("bitbucket", "https://api.bitbucket.org/2.0/users/{u}", "404", None),
+ ("sourcehut", "https://git.sr.ht/~{u}", "404", None),
+ ("hackernews", "https://hacker-news.firebaseio.com/v0/user/{u}.json", "ausente", "null"),
+ ("devto", "https://dev.to/api/users/by_username?url={u}", "presente", '"username"'),
+ ("keybase", "https://keybase.io/_/api/1.0/user/lookup.json?username={u}", "presente", '"code":0'),
+ ("codepen", "https://codepen.io/{u}", "404", None),
+ ("npm", "https://www.npmjs.com/~{u}", "404", None),
+ ("pypi", "https://pypi.org/user/{u}/", "404", None),
+ ("dockerhub", "https://hub.docker.com/v2/users/{u}/", "404", None),
+ ("stackoverflow", "https://api.stackexchange.com/2.3/users?order=desc&sort=reputation&inname={u}&site=stackoverflow", "presente", '"account_id"'),
+ ("hackerone", "https://hackerone.com/{u}", "presente", "hackerone"),
+ ("bugcrowd", "https://bugcrowd.com/{u}", "presente", "bugcrowd"),
+ ("tryhackme", "https://tryhackme.com/p/{u}", "presente", "tryhackme"),
+ ("kaggle", "https://www.kaggle.com/{u}", "404", None),
+ ("replit", "https://replit.com/@{u}", "presente", "<title>"),
+ ("notion", "https://{u}.notion.site", "404", None),
+ ("wordpress", "https://{u}.wordpress.com", "404", None),
+ ("blogspot", "https://{u}.blogspot.com", "404", None),
+ ("substack", "https://{u}.substack.com", "404", None),
+ ("gravatar", "https://gravatar.com/{u}", "presente", "gravatar"),
+ ("reddit", "https://www.reddit.com/user/{u}/about.json", "presente", '"name"'),
+ ("telegram", "https://t.me/{u}", "presente", "tgme_page_title"),
+ ("mastodon", "https://mastodon.social/api/v1/accounts/lookup?acct={u}", "presente", '"username"'),
+ ("pixelfed", "https://pixelfed.social/api/v1/accounts/lookup?acct={u}", "presente", '"username"'),
+ ("lemmy", "https://lemmy.world/api/v3/user?username={u}", "presente", '"person"'),
+ ("instagram", "https://www.instagram.com/{u}/", "ausente", "Page Not Found"),
+ ("tiktok", "https://www.tiktok.com/@{u}", "ausente", "Couldn't find this account"),
+ ("youtube", "https://www.youtube.com/@{u}", "404", None),
+ ("twitch", "https://www.twitch.tv/{u}", "404", None),
+ ("soundcloud", "https://soundcloud.com/{u}", "404", None),
+ ("vimeo", "https://vimeo.com/{u}", "404", None),
+ ("dailymotion", "https://www.dailymotion.com/{u}", "404", None),
+ ("flickr", "https://www.flickr.com/people/{u}/", "404", None),
+ ("imgur", "https://imgur.com/user/{u}", "404", None),
+ ("pinterest", "https://www.pinterest.com/{u}/", "404", None),
+ ("tumblr", "https://{u}.tumblr.com", "404", None),
+ ("medium", "https://medium.com/@{u}", "presente", "medium"),
+ ("deviantart", "https://www.deviantart.com/{u}", "404", None),
+ ("behance", "https://www.behance.net/{u}", "404", None),
+ ("dribbble", "https://dribbble.com/{u}", "404", None),
+ ("artstation", "https://www.artstation.com/{u}", "404", None),
+ ("500px", "https://500px.com/p/{u}", "404", None),
+ ("vsco", "https://vsco.co/{u}", "404", None),
+ ("unsplash", "https://unsplash.com/@{u}", "404", None),
+ ("bandcamp", "https://bandcamp.com/{u}", "404", None),
+ ("mixcloud", "https://www.mixcloud.com/{u}/", "404", None),
+ ("lastfm", "https://www.last.fm/user/{u}", "404", None),
+ ("spotify", "https://open.spotify.com/user/{u}", "404", None),
+ ("goodreads", "https://www.goodreads.com/{u}", "404", None),
+ ("letterboxd", "https://letterboxd.com/{u}/", "404", None),
+ ("trakt", "https://trakt.tv/users/{u}", "404", None),
+ ("myanimelist", "https://myanimelist.net/profile/{u}", "404", None),
+ ("anilist", "https://anilist.co/user/{u}", "404", None),
+ ("steam", "https://steamcommunity.com/id/{u}", "presente", "steamid"),
+ ("roblox", "https://www.roblox.com/user.aspx?username={u}", "presente", "profile"),
+ ("chess", "https://api.chess.com/pub/player/{u}", "404", None),
+ ("lichess", "https://lichess.org/api/user/{u}", "404", None),
+ ("duolingo", "https://www.duolingo.com/profile/{u}", "404", None),
+ ("aboutme", "https://about.me/{u}", "404", None),
+ ("linktree", "https://linktr.ee/{u}", "404", None),
+ ("kofi", "https://ko-fi.com/{u}", "404", None),
+ ("buymeacoffee", "https://buymeacoffee.com/{u}", "404", None),
+ ("patreon", "https://www.patreon.com/{u}", "404", None),
+ ("onlyfans", "https://onlyfans.com/{u}", "404", None),
+ ("fansly", "https://fansly.com/{u}", "404", None),
+ ("vk", "https://vk.com/{u}", "presente", "vk.com"),
+ ("okru", "https://ok.ru/{u}", "presente", "ok.ru"),
+ ("livejournal", "https://{u}.livejournal.com", "404", None),
+ ("mastodon.online", "https://mastodon.online/api/v1/accounts/lookup?acct={u}", "presente", '"username"'),
+ ("mstdn.social", "https://mstdn.social/api/v1/accounts/lookup?acct={u}", "presente", '"username"'),
+ ("fosstodon", "https://fosstodon.org/api/v1/accounts/lookup?acct={u}", "presente", '"username"'),
+ ("infosec.exchange", "https://infosec.exchange/api/v1/accounts/lookup?acct={u}", "presente", '"username"'),
+ ("ebay", "https://www.ebay.com/usr/{u}", "404", None),
+ ("etsy", "https://www.etsy.com/shop/{u}", "404", None),
+ ("amazon", "https://www.amazon.com/gp/profile/{u}", "404", None),
+ ("fiverr", "https://www.fiverr.com/{u}", "404", None),
+ ("producthunt", "https://www.producthunt.com/@{u}", "404", None),
+ ("beacons", "https://beacons.ai/{u}", "404", None),
+ ("carrd", "https://{u}.carrd.co", "404", None),
+ ("allmylinks", "https://allmylinks.com/{u}", "404", None),
+ ("wattpad", "https://www.wattpad.com/user/{u}", "404", None),
+ ("archiveorg", "https://archive.org/details/@{u}", "404", None),
+ ("wikipedia", "https://en.wikipedia.org/wiki/User:{u}", "404", None),
+ ("habr", "https://habr.com/ru/users/{u}/", "404", None),
+ ("trello", "https://trello.com/{u}", "404", None),
+ ("pastebin", "https://pastebin.com/u/{u}", "404", None),
+ ("gist", "https://gist.github.com/{u}", "404", None),
+]
+
+SITIOS_MAIL = [
+ ("adobe", "https://auth.services.adobe.com/signup/v2/webexists", ""),
+ ("spotify", "https://www.spotify.com/api/signup/validate", ""),
+ ("twitter", "https://api.twitter.com/i/users/email_available.json?email={e}", ""),
+ ("envato", "https://account.envato.com/api/email_available?email={e}", ""),
+ ("patreon", "https://www.patreon.com/api/auth/check_email?email={e}", ""),
+ ("wordpress", "https://wordpress.com/wp-login.php?action=lostpassword", ""),
+]
+
+DORKS_DEFECTO = [
+ ("index of", 'intitle:"index of" "{t}"'),
+ ("pdf", '"{t}" filetype:pdf'),
+ ("hoja calculo", '"{t}" (filetype:xlsx OR filetype:csv)'),
+ ("env / conf", '"{t}" (ext:env OR ext:conf)'),
+ ("sql", '"{t}" ext:sql "INSERT INTO"'),
+ ("subdominios", "site:*.{t} -www"),
+ ("login", "site:{t} inurl:login"),
+ ("admin", "site:{t} inurl:admin"),
+ ("backup", '"{t}" (ext:bak OR ext:old OR ext:backup)'),
+ ("git expuesto", '"{t}" intitle:"index of" ".git"'),
+ ("correos", '"{t}" filetype:xlsx "@"'),
+ ("camaras", 'site:{t} inurl:"view/view.shtml"'),
+ ("menciones", '"{t}" (site:reddit.com OR site:news.ycombinator.com)'),
+]
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  MOTOR · IP
+# ══════════════════════════════════════════════════════════════════════════
+
+def _geo(ctx, ip):
+    q = urllib.parse.quote(ip)
+    d = {}
+    res = paralelo({
+        "ipwho": lambda: ctx.red.json("https://ipwho.is/" + q),
+        "ipapiis": lambda: ctx.red.json("https://api.ipapi.is/?q=" + q),
+        "ipapi": lambda: ctx.red.json(
+            "http://ip-api.com/json/%s?fields=status,country,countryCode,"
+            "regionName,city,zip,lat,lon,timezone,isp,org,as,reverse,mobile,"
+            "proxy,hosting" % q),
+        "ipinfo": lambda: ctx.red.json("https://ipinfo.io/%s/json" % q),
+        "freeip": lambda: ctx.red.json("https://freeipapi.com/api/json/" + q),
+        "iploc": lambda: ctx.red.json("https://api.iplocation.net/?ip=" + q),
+        "hostip": lambda: ctx.red.json("https://api.hostip.info/get_json.php?ip=" + q),
+    })
+
+    def pon(k, v):
+        if v not in (None, "", 0, "-") and not d.get(k):
+            d[k] = v
+
+    a = res.get("ipwho") or {}
+    if a.get("success") is not False:
+        pon("pais", a.get("country"))
+        pon("codigo", a.get("country_code"))
+        pon("region", a.get("region"))
+        pon("ciudad", a.get("city"))
+        pon("cp", a.get("postal"))
+        pon("lat", a.get("latitude"))
+        pon("lon", a.get("longitude"))
+        pon("zona", (a.get("timezone") or {}).get("id"))
+        con = a.get("connection") or {}
+        pon("isp", con.get("isp"))
+        pon("org", con.get("org"))
+        if con.get("asn"):
+            pon("asn", "AS%s" % con["asn"])
+
+    b = res.get("ipapiis") or {}
+    pon("vpn", b.get("is_vpn"))
+    pon("proxy", b.get("is_proxy"))
+    pon("tor", b.get("is_tor"))
+    pon("hosting", b.get("is_datacenter"))
+    pon("abuser", b.get("is_abuser"))
+    pon("crawler", b.get("is_crawler"))
+    pon("empresa", (b.get("company") or {}).get("name"))
+    pon("org", (b.get("asn") or {}).get("org"))
+    pon("asn", (b.get("asn") or {}).get("asn"))
+    loc = b.get("location") or {}
+    pon("pais", loc.get("country"))
+    pon("ciudad", loc.get("city"))
+    pon("region", loc.get("state"))
+    pon("lat", loc.get("latitude"))
+    pon("lon", loc.get("longitude"))
+    pon("zona", loc.get("timezone"))
+
+    e = res.get("ipapi") or {}
+    if e.get("status") == "success":
+        pon("pais", e.get("country"))
+        pon("codigo", e.get("countryCode"))
+        pon("region", e.get("regionName"))
+        pon("ciudad", e.get("city"))
+        pon("cp", e.get("zip"))
+        pon("lat", e.get("lat"))
+        pon("lon", e.get("lon"))
+        pon("zona", e.get("timezone"))
+        pon("isp", e.get("isp"))
+        pon("org", e.get("org"))
+        pon("asn", e.get("as"))
+        pon("reverse", e.get("reverse"))
+        pon("movil", e.get("mobile"))
+        pon("proxy", e.get("proxy"))
+        pon("hosting", e.get("hosting"))
+
+    f = res.get("ipinfo") or {}
+    pon("org", f.get("org"))
+    pon("reverse", f.get("hostname"))
+    pon("ciudad", f.get("city"))
+    pon("region", f.get("region"))
+    pon("pais", f.get("country"))
+    pon("zona", f.get("timezone"))
+    if f.get("loc") and not d.get("lat"):
+        try:
+            la, lo = f["loc"].split(",")
+            pon("lat", float(la))
+            pon("lon", float(lo))
+        except Exception:
+            pass
+
+    g = res.get("freeip") or {}
+    pon("pais", g.get("countryName"))
+    pon("codigo", g.get("countryCode"))
+    pon("ciudad", g.get("cityName"))
+    pon("region", g.get("regionName"))
+    pon("zona", g.get("timeZone"))
+    if g.get("isProxy"):
+        pon("proxy", True)
+
+    il = res.get("iploc") or {}
+    pon("pais", il.get("country_name"))
+    pon("codigo", il.get("country_code2"))
+    pon("isp", il.get("isp"))
+
+    h = res.get("hostip") or {}
+    pon("pais", h.get("country_name"))
+    pon("codigo", h.get("country_code"))
+    pon("ciudad", h.get("city"))
+    return d
+
+
+def _txt(nombre, tipo="TXT"):
+    d = json.loads(urllib.request.urlopen(
+        "https://dns.google/resolve?name=%s&type=%s"
+        % (urllib.parse.quote(nombre), tipo), timeout=TIMEOUT).read().decode("utf-8", "replace")
+    ) if True else {}
+    return d
+
+
+def _dns_json(nombre, tipo):
+    try:
+        url = ("https://dns.google/resolve?name=%s&type=%s"
+               % (urllib.parse.quote(nombre), tipo))
+        with urllib.request.urlopen(url, timeout=TIMEOUT) as r:
+            return json.loads(r.read(200000).decode("utf-8", "replace"))
+    except Exception:
+        return {}
+
+
+def _asn_cymru(ip):
+    inv = ".".join(reversed(str(ip).split(".")))
+    for reg in (_dns_json(inv + ".origin.asn.cymru.com", "TXT").get("Answer") or []):
+        partes = [x.strip() for x in str(reg.get("data", "")).strip('"').split("|")]
+        if len(partes) >= 5:
+            return {"asn": partes[0], "prefijo": partes[1], "pais": partes[2],
+                    "registro": partes[3], "fecha": partes[4]}
+    return None
+
+
+def _asn_nombre(asn):
+    limpio = str(asn).replace("AS", "")
+    for reg in (_dns_json("AS%s.asn.cymru.com" % limpio, "TXT").get("Answer") or []):
+        partes = [x.strip() for x in str(reg.get("data", "")).strip('"').split("|")]
+        if len(partes) >= 5:
+            return {"asn": partes[0], "pais": partes[1], "registro": partes[2],
+                    "nombre": partes[4]}
+    return None
+
+
+def cmd_ip(ctx, objetivo=None):
+    ui = ctx.ui
+    if not objetivo:
+        ui.malo("uso: ip <ip|dominio>")
+        return
+    if es_ipv6(objetivo):
+        ui.aviso("ipv6: cobertura limitada, se consulta igual")
+    ip = resolver(objetivo)
+    if not ip:
+        ui.malo("no se pudo resolver: " + str(objetivo))
+        ctx.emitir({"error": "no resuelto", "objetivo": str(objetivo)})
+        return
+
+    ui.titulo("IP INTEL · %s -> %s" % (objetivo, ip))
+    datos = {"objetivo": str(objetivo), "ip": ip, "fecha": ahora()}
+
+    if es_privada(ip):
+        ui.aviso("direccion privada: sin geo ni reputacion")
+        ui.campo("rango", "RFC1918 / loopback")
+        ctx.archivar("ip", objetivo, datos)
+        ctx.emitir(datos)
+        return
+
+    q = urllib.parse.quote(ip)
+    res = ctx.anim.esperar("consultando 9 fuentes", lambda: paralelo({
+        "geo": lambda: _geo(ctx, ip),
+        "cymru": lambda: _asn_cymru(ip),
+        "idb": lambda: ctx.red.json("https://internetdb.shodan.io/" + q),
+        "otx": lambda: ctx.red.json(
+            "https://otx.alienvault.com/api/v1/indicators/IPv4/%s/general" % q),
+        "sfs": lambda: ctx.red.json("https://api.stopforumspam.org/api?ip=%s&json" % q),
+        "scan": lambda: ctx.red.json("https://urlscan.io/api/v1/search/?q=ip:%s&size=20" % q),
+        "rev": lambda: ctx.red.get("https://api.hackertarget.com/reverseiplookup/?q=" + q),
+        "rdap": lambda: ctx.red.json("https://rdap.org/ip/" + q,
+                                     headers={"Accept": "application/rdap+json"}),
+        "ptr": lambda: _dns_json(ip + ".in-addr.arpa" if not ip.startswith("::") else ip, "PTR"),
+    }), estilo="radar") or {}
+
+    g = res.get("geo") or {}
+    if not g and not res.get("cymru"):
+        ui.malo("las fuentes no devolvieron datos")
+        ctx.emitir({"error": "sin datos", "ip": ip})
+        return
+
+    cy = res.get("cymru")
+    if cy:
+        ui.sub("red")
+        ui.campo("asn", "AS" + str(cy.get("asn")))
+        ui.campo("prefijo", cy.get("prefijo"))
+        ui.campo("registro rir", cy.get("registro"))
+        ui.campo("pais del asn", cy.get("pais"))
+        nom = _asn_nombre(cy.get("asn"))
+        if nom:
+            ui.campo("operador", nom.get("nombre"))
+            datos["operador"] = nom.get("nombre")
+        datos["asn"] = {"asn": cy.get("asn"), "prefijo": cy.get("prefijo"),
+                        "rir": cy.get("registro")}
+    if g.get("org"):
+        ui.campo("org", g.get("org"))
+    if g.get("isp"):
+        ui.campo("isp", g.get("isp"))
+    if g.get("empresa"):
+        ui.campo("empresa", g.get("empresa"))
+
+    if g.get("pais"):
+        ui.sub("geolocalizacion")
+        ui.campo("pais", "%s (%s)" % (g.get("pais"), g.get("codigo") or "??"))
+        ui.campo("region", g.get("region"))
+        ui.campo("ciudad", g.get("ciudad"))
+        ui.campo("cp", g.get("cp"))
+        if g.get("lat"):
+            ui.campo("coord", "%s , %s" % (g.get("lat"), g.get("lon")))
+            ui.mapa(g.get("lat"), g.get("lon"))
+        if g.get("zona"):
+            ui.campo("zona", g.get("zona"))
+        datos["geo"] = {k: g.get(k) for k in
+                        ("pais", "codigo", "region", "ciudad", "lat", "lon", "zona")}
+
+    ptr_d = res.get("ptr") or {}
+    for a in ptr_d.get("Answer") or []:
+        if a.get("type") == 12:
+            ui.campo("dns inverso", str(a.get("data", "")).rstrip("."))
+    if g.get("reverse"):
+        ui.campo("dns inverso", g.get("reverse"))
+
+    ui.sub("reputacion")
+    señales = [et for k, et in (("vpn", "VPN"), ("proxy", "PROXY"), ("tor", "TOR"),
+                                ("hosting", "DATACENTER"), ("abuser", "ABUSER"),
+                                ("crawler", "CRAWLER"), ("movil", "MOVIL")) if g.get(k)]
+    ui.campo("señales", ", ".join(señales) if señales else "limpio")
+    datos["señales"] = señales
+
+    sfs = (res.get("sfs") or {})
+    if sfs.get("success"):
+        info = sfs.get("ip") or {}
+        ui.campo("stopforumspam", "listado" if info.get("appears") else "no listado")
+        if info.get("frequency"):
+            ui.campo("  reportes", info.get("frequency"))
+        datos["sfs"] = bool(info.get("appears"))
+
+    otx = res.get("otx") or {}
+    pulsos = (otx.get("pulse_info") or {})
+    if pulsos.get("count") is not None:
+        ui.campo("pulsos otx", pulsos.get("count"))
+        datos["otx_pulsos"] = pulsos.get("count")
+    if otx.get("tags"):
+        ui.campo("tags otx", ", ".join(otx["tags"][:8]))
+
+    idb = res.get("idb") or {}
+    if idb.get("ports"):
+        ui.campo("puertos shodan", ", ".join(str(p) for p in idb["ports"][:16]))
+        datos["puertos"] = idb["ports"]
+    if idb.get("hostnames"):
+        ui.campo("hostnames", ", ".join(idb["hostnames"][:6]))
+    if idb.get("vulns"):
+        ui.campo("cves", ", ".join(list(idb["vulns"])[:8]))
+        datos["cves"] = list(idb["vulns"])
+    if idb.get("tags"):
+        ui.campo("tags shodan", ", ".join(idb["tags"][:8]))
+
+    rd = res.get("rdap") or {}
+    if rd and not rd.get("errorCode"):
+        ui.sub("registro")
+        ui.campo("rango", "%s - %s" % (rd.get("startAddress"), rd.get("endAddress")))
+        ui.campo("handle", rd.get("handle"))
+        for ev in (rd.get("events") or [])[:4]:
+            ui.campo(ev.get("eventAction") or "evento", (ev.get("eventDate") or "")[:10])
+
+    scan = res.get("scan") or {}
+    dominios = sorted({urllib.parse.urlparse(r.get("page", {}).get("url", "")).netloc
+                       for r in (scan.get("results") or []) if r.get("page")})
+    if dominios:
+        ui.sub("dominios que la usan (urlscan)")
+        for d in dominios[:12]:
+            ui.enlace("host", "https://" + d)
+        datos["dominios"] = dominios[:12]
+
+    code_rev, cuerpo_rev = res.get("rev") or (None, "")
+    if code_rev == 200 and "error" not in str(cuerpo_rev).lower()[:40]:
+        hosts = [l.strip() for l in str(cuerpo_rev).splitlines() if l.strip()][:14]
+        if hosts:
+            ui.sub("reverse ip")
+            for h in hosts:
+                ui.enlace("host", "https://" + h)
+            datos["reverse"] = hosts
+
+    puntos = sum(1 for k in ("vpn", "proxy", "tor", "abuser") if g.get(k))
+    if datos.get("sfs"):
+        puntos += 2
+    if datos.get("cves"):
+        puntos += 1
+    nivel = "ALTO" if puntos >= 3 else "MEDIO" if puntos >= 1 else "BAJO"
+    ui.sep()
+    if nivel == "ALTO":
+        ui.malo("riesgo " + nivel)
+    elif nivel == "MEDIO":
+        ui.aviso("riesgo " + nivel)
+    else:
+        ui.ok("riesgo " + nivel)
+    datos["riesgo"] = nivel
+
+    ui.sub("pivotes")
+    ui.enlace("shodan", "https://www.shodan.io/host/" + ip)
+    ui.enlace("virustotal", "https://www.virustotal.com/gui/ip-address/" + ip)
+    ui.enlace("abuseipdb", "https://www.abuseipdb.com/check/" + ip)
+    ui.enlace("greynoise", "https://viz.greynoise.io/ip/" + ip)
+    ui.enlace("bgp.tools", "https://bgp.tools/as/" + str((cy or {}).get("asn", "")))
+    ui.enlace("censys", "https://search.censys.io/hosts/" + ip)
+    ui.sep()
+    ctx.archivar("ip", objetivo, datos)
+    ctx.emitir(datos)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  MOTOR · PHONE
+# ══════════════════════════════════════════════════════════════════════════
+
+def _dorks_tel(e164, digitos, nacional):
+    q = urllib.parse.quote
+    pares = [
+        ("busqueda exacta", e164),
+        ("variante nacional", '"%s"' % nacional),
+        ("facebook", '"%s" site:facebook.com' % e164),
+        ("instagram", '"%s" site:instagram.com' % e164),
+        ("linkedin", '"%s" site:linkedin.com' % e164),
+        ("vk", '"%s" site:vk.com' % e164),
+        ("clasificados", '"%s" (site:olx.com OR site:milanuncios.com OR site:mercadolibre.com)' % e164),
+        ("pdf con datos", '"%s" filetype:pdf' % e164),
+        ("excel con datos", '"%s" (filetype:xlsx OR filetype:csv)' % e164),
+        ("whatsapp publico", '"wa.me/%s"' % digitos),
+        ("spam / estafa", '"%s" (spam OR estafa OR fraude)' % e164),
+        ("negocio", '"%s" (empresa OR tienda OR contacto)' % e164),
+    ]
+    return [(et, "https://www.google.com/search?q=" + q(dk)) for et, dk in pares]
+
+
+def _enlaces_tel(e164):
+    n = e164.lstrip("+")
+    return [
+        ("truecaller", "https://www.truecaller.com/search/es/" + n),
+        ("sync.me", "https://sync.me/search/?number=" + n),
+        ("getcontact", "https://www.getcontact.com/es/phone/" + n),
+        ("numlookup", "https://www.numlookup.com/?number=" + n),
+        ("spydialer", "https://www.spydialer.com/default.aspx?num=" + n),
+        ("calleridtest", "https://calleridtest.com/" + n),
+        ("tellows", "https://www.tellows.es/num/" + n),
+        ("whocallsme", "https://whocallsme.com/Phone-Number.aspx/" + n),
+        ("hlr-lookups", "https://www.hlr-lookups.com/en/phone-lookup?number=" + n),
+        ("epieos", "https://tools.epieos.com/phone.php?phone=" + e164),
+        ("osintcat", "https://www.osintcat.net/?phone=" + n),
+        ("predictasearch", "https://predictasearch.com/?phone=" + n),
+        ("castrick", "https://castrickclues.com/?phone=" + n),
+        ("zuckered", "https://haveibeenzuckered.com/?number=" + n),
+        ("whatsapp", "https://wa.me/" + n),
+        ("telegram", "https://t.me/+" + n),
+        ("viber", "viber://chat?number=" + urllib.parse.quote(e164)),
+        ("signal", "https://signal.me/#p/" + e164),
+    ]
+
+
+def cmd_phone(ctx, numero=None):
+    ui = ctx.ui
+    if not numero:
+        ui.malo("uso: phone +34600123456")
+        return
+
+    limpio = re.sub(r"[^\d+]", "", str(numero))
+    if not limpio.startswith("+"):
+        limpio = "+" + limpio
+    digitos = limpio[1:]
+    if len(digitos) < 7 or len(digitos) > 15:
+        ui.malo("longitud invalida (7-15 digitos)")
+        return
+
+    e164 = "+" + digitos
+    cod = None
+    for largo in (3, 2, 1):
+        if digitos[:largo] in PREFIJOS:
+            cod = digitos[:largo]
+            break
+
+    ui.titulo("PHONE INTEL · " + e164)
+    datos = {"e164": e164, "fecha": ahora()}
+    valido, tipo, operadora, region, zonas = "?", "-", "-", "-", []
+
+    if HAY_FONO:
+        try:
+            n = phonenumbers.parse(e164, None)
+            valido = "si" if phonenumbers.is_valid_number(n) else "no"
+            tipos = {0: "fijo", 1: "movil", 2: "fijo o movil", 3: "tarifa especial",
+                     4: "premium", 5: "compartido", 6: "voip", 7: "personal",
+                     8: "pager", 9: "uan", 10: "buzon de voz"}
+            tipo = tipos.get(int(phonenumbers.number_type(n)), "desconocido")
+            operadora = pn_carrier.name_for_number(n, "es") or "-"
+            region = pn_geo.description_for_number(n, "es") or "-"
+            zonas = list(pn_tz.time_zones_for_number(n))
+            ui.sub("formato")
+            for etq, fmt in (("e164", phonenumbers.PhoneNumberFormat.E164),
+                             ("internacional", phonenumbers.PhoneNumberFormat.INTERNATIONAL),
+                             ("nacional", phonenumbers.PhoneNumberFormat.NATIONAL),
+                             ("rfc3966", phonenumbers.PhoneNumberFormat.RFC3966)):
+                ui.campo(etq, phonenumbers.format_number(n, fmt))
+            datos["valido"] = valido == "si"
+        except Exception:
+            ui.aviso("numero no parseable, sigo por prefijo")
+    else:
+        ui.sub("modo basico · instala phonenumbers para validacion real")
+        ui.campo("e164", e164)
+        ui.aviso("python3 -m pip install phonenumbers")
+
+    ui.sub("identificacion")
+    ui.campo("valido", valido)
+    ui.campo("tipo de linea", tipo)
+    nacional = digitos[len(cod or ""):]
+    if cod:
+        ui.campo("pais (prefijo)", "+" + cod)
+        tabla = PREFIJOS.get(cod) or {}
+        zona = None
+        for largo in (3, 2, 1):
+            if nacional[:largo] in tabla:
+                zona = tabla[nacional[:largo]]
+                break
+        if zona is None and nacional[:1] in "67":
+            zona = "movil"
+        ui.campo("area", zona or "sin dato")
+        datos["area"] = zona
+    if operadora != "-":
+        ui.campo("operadora", operadora)
+        datos["operadora"] = operadora
+    if region != "-":
+        ui.campo("region", region)
+    if zonas:
+        ui.campo("zonas horarias", ", ".join(zonas))
+
+    if cod:
+        for (mcc, mnc), nombre in MNC.items():
+            if mcc.zfill(3) == cod.zfill(3) and nacional.startswith(mnc):
+                ui.campo("red movil", "%s (MCC %s / MNC %s)" % (nombre, mcc, mnc))
+                datos["red"] = nombre
+                break
+
+    ui.sub("registro en servicios (señal)")
+    tareas = {}
+    for nombre, plantilla, aguja in SERVICIOS_TEL:
+        url = plantilla.format(e164=urllib.parse.quote(e164), digitos=digitos)
+
+        def chk(url=url, aguja=aguja):
+            code, cuerpo = ctx.red.get(url, timeout=11)
+            if code != 200:
+                return False
+            return (aguja in cuerpo) if aguja else True
+
+        tareas[nombre] = chk
+    señales = ctx.anim.esperar("sondeando servicios",
+                               lambda: paralelo(tareas), estilo="ondas") or {}
+    for nombre, _, _ in SERVICIOS_TEL:
+        ui.campo(nombre, "registrado" if señales.get(nombre) else "sin señal")
+    registrados = [n for n, v in señales.items() if v]
+    datos["registrado_en"] = registrados
+    if not registrados:
+        ui.info("ninguna señal concluyente (habitual en fijos)")
+
+    ui.sub("dorks listos para abrir")
+    for et, url in _dorks_tel(e164, digitos, nacional):
+        ui.enlace(et[:14], url)
+    datos["dorks"] = dict(_dorks_tel(e164, digitos, nacional))
+
+    ui.sub("reverse lookup")
+    for nombre, url in _enlaces_tel(e164):
+        ui.enlace(nombre, url)
+    datos["enlaces"] = dict(_enlaces_tel(e164))
+
+    ui.sep()
+    ctx.archivar("phone", e164, datos)
+    ctx.emitir(datos)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  MOTOR · USER
+# ══════════════════════════════════════════════════════════════════════════
+
+def _comprobar(ctx, nombre, plantilla, tipo, aguja, usuario):
+    url = plantilla.format(u=urllib.parse.quote(usuario))
+    code, cuerpo = ctx.red.get(url, timeout=12)
+    if code != 200:
+        return nombre, url, False
+    if tipo == "404":
+        return nombre, url, True
+    if tipo == "presente":
+        return nombre, url, bool(aguja and aguja in cuerpo)
+    if tipo == "ausente":
+        return nombre, url, bool(aguja and aguja not in cuerpo)
+    return nombre, url, True
+
+
+def cmd_user(ctx, usuario=None):
+    ui = ctx.ui
+    if not usuario:
+        ui.malo("uso: user <nick>")
+        return
+    usuario = str(usuario).strip().lstrip("@")
+    if not re.fullmatch(r"[\w.\-]{1,64}", usuario):
+        ui.malo("nick invalido")
+        return
+
+    ui.titulo("USER ENUM · %s · %d sitios" % (usuario, len(SITIOS)))
+    tareas = {s[0]: (lambda s=s: _comprobar(ctx, s[0], s[1], s[2], s[3], usuario))
+              for s in SITIOS}
+    res = ctx.anim.esperar("barriendo sitios", lambda: paralelo(tareas, limite=18),
+                           estilo="reticula") or {}
+
+    encontrados = []
+    for nombre, plantilla, tipo, aguja in SITIOS:
+        r = res.get(nombre)
+        if not r:
+            continue
+        _, url, existe = r
+        if existe:
+            encontrados.append((nombre, url))
+            ui.ok(pad(nombre, 16) + url)
+
+    ui.sep()
+    if encontrados:
+        ui.aviso("%d perfiles con el nick '%s'" % (len(encontrados), usuario))
+    else:
+        ui.malo("sin coincidencias utiles")
+
+    q = urllib.parse.quote(usuario)
+    ui.sub("pivotes")
+    ui.enlace("google", "https://www.google.com/search?q=" + q)
+    ui.enlace("dorks", 'https://www.google.com/search?q=intext%3A%22' + q + '%22')
+    ui.enlace("whatsmyname", "https://whatsmyname.app/?q=" + q)
+    ui.enlace("user-searcher", "https://www.user-searcher.com/?q=" + q)
+    ui.enlace("checkusernames", "https://checkusernames.com/?q=" + q)
+    ui.sep()
+    datos = {"usuario": usuario, "encontrados": dict(encontrados),
+             "total": len(encontrados), "fecha": ahora()}
+    ctx.archivar("user", usuario, datos)
+    ctx.emitir(datos)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  MOTOR · MAIL
+# ══════════════════════════════════════════════════════════════════════════
+
+def cmd_mail(ctx, correo=None):
+    ui = ctx.ui
+    if not correo:
+        ui.malo("uso: mail correo@dominio.com")
+        return
+    correo = str(correo).strip().lower()
+    if not correo_valido(correo):
+        ui.malo("formato invalido")
+        return
+    usuario, dominio = correo.split("@", 1)
+
+    ui.titulo("MAIL INTEL · " + correo)
+    datos = {"correo": correo, "fecha": ahora()}
+
+    mx = [str(a.get("data", "")).split()[-1].rstrip(".")
+          for a in (_dns_json(dominio, "MX").get("Answer") or []) if a.get("type") == 15]
+    ui.sub("dominio")
+    ui.campo("mx", ", ".join(mx[:3]) if mx else "sin mx (no recibe correo)")
+    datos["mx"] = mx
+
+    spf = [t for t in (_dns_json(dominio, "TXT").get("Answer") or [])
+           if "v=spf1" in str(t.get("data", ""))]
+    dmarc = [t for t in (_dns_json("_dmarc." + dominio, "TXT").get("Answer") or [])
+             if "v=DMARC1" in str(t.get("data", ""))]
+    ui.campo("spf", "configurado" if spf else "ausente")
+    ui.campo("dmarc", "configurado" if dmarc else "ausente")
+    datos["spf"] = bool(spf)
+    datos["dmarc"] = bool(dmarc)
+
+    ui.sub("registro en servicios")
+    tareas = {}
+    for nombre, plantilla, aguja in SITIOS_MAIL:
+        url = plantilla.format(e=urllib.parse.quote(correo))
+
+        def chk(url=url, aguja=aguja):
+            code, cuerpo = ctx.red.get(url, timeout=12)
+            if code != 200:
+                return False
+            return (aguja in cuerpo) if aguja else True
+
+        tareas[nombre] = chk
+    r = ctx.anim.esperar("sondeando servicios", lambda: paralelo(tareas),
+                         estilo="sobre") or {}
+    usados = [n for n, v in r.items() if v]
+    for n, _, _ in SITIOS_MAIL:
+        if r.get(n):
+            ui.campo(n, "registrado")
+    if not usados:
+        ui.info("sin señales concluyentes")
+    datos["registrado_en"] = usados
+
+    ui.sub("reputacion")
+    er = ctx.red.json("https://emailrep.io/" + urllib.parse.quote(correo))
+    if isinstance(er, dict) and er.get("reputation"):
+        ui.campo("reputacion", er.get("reputation"))
+        ui.campo("sospechoso", "si" if er.get("suspicious") else "no")
+        det = er.get("details") or {}
+        ui.campo("credenciales fugadas", "si" if det.get("credentials_leaked") else "no")
+        ui.campo("en brechas", "si" if det.get("data_breach") else "no")
+        ui.campo("perfiles", ", ".join(det.get("profiles") or []) or "-")
+        datos["emailrep"] = {"reputacion": er.get("reputation"),
+                             "sospechoso": bool(er.get("suspicious")),
+                             "fugado": bool(det.get("credentials_leaked"))}
+    else:
+        ui.info("emailrep sin respuesta")
+
+    dis = ctx.red.json("https://www.disify.com/api/email/" + urllib.parse.quote(correo))
+    if isinstance(dis, dict) and "disposable" in dis:
+        ui.campo("desechable", "si" if dis.get("disposable") else "no")
+        ui.campo("catch-all", "si" if dis.get("alias") else "no")
+        datos["desechable"] = bool(dis.get("disposable"))
+
+    h = hashlib.md5(correo.encode()).hexdigest()
+    gv = ctx.red.json("https://gravatar.com/%s.json" % h)
+    if isinstance(gv, dict) and gv.get("entry"):
+        e = gv["entry"][0]
+        ui.sub("gravatar")
+        ui.campo("nombre", e.get("displayName") or "-")
+        for acc in (e.get("accounts") or [])[:8]:
+            ui.enlace(str(acc.get("shortname")), str(acc.get("url")))
+        datos["gravatar"] = {"nombre": e.get("displayName"),
+                             "cuentas": [a.get("shortname") for a in e.get("accounts") or []]}
+
+    hb = ctx.red.json("https://haveibeenpwned.com/unifiedsearch/"
+                      + urllib.parse.quote(correo))
+    if isinstance(hb, dict) and hb.get("Breaches"):
+        ui.sub("brechas")
+        for b in hb["Breaches"][:8]:
+            ui.campo("·", "%s (%s)" % (b.get("Name"), (b.get("BreachDate") or "")[:4]))
+        datos["brechas"] = [b.get("Name") for b in hb["Breaches"]]
+
+    ui.sub("pivotes")
+    ui.enlace("epieos", "https://tools.epieos.com/email.php?q=" + urllib.parse.quote(correo))
+    ui.enlace("hibp", "https://haveibeenpwned.com/account/" + urllib.parse.quote(correo))
+    ui.enlace("gravatar", "https://gravatar.com/" + h)
+    ui.enlace("google", "https://www.google.com/search?q=" + urllib.parse.quote('"%s"' % correo))
+    ui.sep()
+    ctx.archivar("mail", correo, datos)
+    ctx.emitir(datos)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  MOTOR · DOMAIN / WHOIS / DNS / TLS
+# ══════════════════════════════════════════════════════════════════════════
+
+def cmd_domain(ctx, dominio=None):
+    ui = ctx.ui
+    if not dominio:
+        ui.malo("uso: domain ejemplo.com")
+        return
+    dominio = dominio_limpio(dominio)
+    if "." not in dominio:
+        ui.malo("dominio invalido")
+        return
+
+    ui.titulo("DOMAIN INTEL · " + dominio)
+    datos = {"dominio": dominio, "fecha": ahora()}
+
+    res = ctx.anim.esperar("recolectando", lambda: paralelo({
+        "crt": lambda: ctx.red.json("https://crt.sh/?q=%25.%s&output=json"
+                                    % urllib.parse.quote(dominio)),
+        "ns": lambda: _dns_json(dominio, "NS"),
+        "mx": lambda: _dns_json(dominio, "MX"),
+        "ip": lambda: resolver(dominio),
+        "scan": lambda: ctx.red.json("https://urlscan.io/api/v1/search/?q=domain:%s&size=30"
+                                     % urllib.parse.quote(dominio)),
+    }), estilo="arbol") or {}
+
+    subs = set()
+    for e in (res.get("crt") or []):
+        for n in str(e.get("name_value", "")).splitlines():
+            n = n.strip().lower().lstrip("*.")
+            if n.endswith("." + dominio) or n == dominio:
+                subs.add(n)
+    if subs:
+        ui.sub("subdominios (crt.sh) · %d" % len(subs))
+        for s in sorted(subs)[:40]:
+            ui.crudo("  " + Color.borde("├─ ") + Color.valor(s))
+        datos["subdominios"] = sorted(subs)
+
+    ns = [str(a.get("data", "")).rstrip(".")
+          for a in (res.get("ns") or {}).get("Answer") or [] if a.get("type") == 2]
+    if ns:
+        ui.sub("nameservers")
+        for n in ns[:8]:
+            ui.campo("ns", n)
+        datos["ns"] = ns
+
+    mx = [str(a.get("data", "")).rstrip(".")
+          for a in (res.get("mx") or {}).get("Answer") or [] if a.get("type") == 15]
+    if mx:
+        ui.campo("mx", ", ".join(mx[:4]))
+        datos["mx"] = mx
+
+    ip = res.get("ip")
+    if ip:
+        ui.campo("a", ip)
+        datos["ip"] = ip
+
+    scan = res.get("scan") or {}
+    if scan.get("results"):
+        ui.sub("urlscan")
+        for r in scan["results"][:8]:
+            ui.enlace("url", str(r.get("page", {}).get("url", "-"))[:70])
+
+    ui.sub("pivotes")
+    ui.enlace("crtsh", "https://crt.sh/?q=%25." + dominio)
+    ui.enlace("shodan", "https://www.shodan.io/search?query=hostname%3A" + dominio)
+    ui.enlace("virustotal", "https://www.virustotal.com/gui/domain/" + dominio)
+    ui.enlace("urlscan", "https://urlscan.io/domain/" + dominio)
+    ui.enlace("wayback", "https://web.archive.org/web/*/" + dominio)
+    ui.enlace("rdap", "https://rdap.org/domain/" + dominio)
+    ui.sep()
+    ctx.archivar("domain", dominio, datos)
+    ctx.emitir(datos)
+
+
+def cmd_whois(ctx, objetivo=None):
+    ui = ctx.ui
+    if not objetivo:
+        ui.malo("uso: whois <dominio|ip>")
+        return
+    objetivo = dominio_limpio(objetivo)
+    ui.titulo("RDAP · " + objetivo)
+    tipo = "ip" if es_ip(objetivo) else "domain"
+    d = ctx.anim.esperar("consultando rdap", lambda: ctx.red.json(
+        "https://rdap.org/%s/%s" % (tipo, urllib.parse.quote(objetivo)),
+        headers={"Accept": "application/rdap+json"}), estilo="sobre")
+
+    if not isinstance(d, dict) or d.get("errorCode"):
+        ui.malo("sin datos rdap")
+        return
+
+    datos = {"objetivo": objetivo, "tipo": tipo}
+    for clave, etq in (("handle", "handle"), ("name", "nombre"),
+                       ("ldhName", "ldh"), ("status", "estado")):
+        if d.get(clave):
+            ui.campo(etq, ", ".join(d[clave]) if isinstance(d[clave], list) else d[clave])
+            datos[clave] = d.get(clave)
+
+    for ent in (d.get("entities") or [])[:8]:
+        roles = ",".join(ent.get("roles") or [])
+        nombre = ""
+        for v in (ent.get("vcardArray") or [None, []])[1] or []:
+            if v and v[0] == "fn":
+                nombre = v[3]
+        if nombre or roles:
+            ui.campo(roles or "entidad", nombre or ent.get("handle") or "-")
+    datos["entidades"] = len(d.get("entities") or [])
+
+    for ev in (d.get("events") or [])[:6]:
+        ui.campo(ev.get("eventAction") or "evento", (ev.get("eventDate") or "")[:10])
+
+    ui.sub("nameservers")
+    for n in (d.get("nameservers") or [])[:6]:
+        ui.campo("ns", n.get("ldhName") or "-")
+
+    ui.sep()
+    ui.enlace("whois web", "https://www.whois.com/whois/" + objetivo)
+    ctx.archivar("whois", objetivo, datos)
+    ctx.emitir(datos)
+
+
+def cmd_dns(ctx, dominio=None):
+    ui = ctx.ui
+    if not dominio:
+        ui.malo("uso: dns dominio.com")
+        return
+    dominio = dominio_limpio(dominio)
+    ui.titulo("DNS · " + dominio)
+    datos = {"dominio": dominio, "registros": {}}
+    for tipo in ("A", "AAAA", "MX", "NS", "TXT", "CNAME", "SOA", "CAA"):
+        d = _dns_json(dominio, tipo)
+        vals = [str(a.get("data", "")) for a in d.get("Answer") or []]
+        if vals:
+            ui.sub(tipo)
+            for v in vals[:10]:
+                ui.campo("·", v[:100])
+            datos["registros"][tipo] = vals
+    if not datos["registros"]:
+        ui.malo("sin registros")
+    ui.sep()
+    ctx.archivar("dns", dominio, datos)
+    ctx.emitir(datos)
+
+
+def cmd_tls(ctx, dominio=None):
+    ui = ctx.ui
+    if not dominio:
+        ui.malo("uso: tls dominio.com")
+        return
+    dominio = dominio_limpio(dominio)
+    ui.titulo("TLS · " + dominio)
+
+    def leer():
+        ctx_s = ssl.create_default_context()
+        ctx_s.check_hostname = False
+        ctx_s.verify_mode = ssl.CERT_NONE
+        with socket.create_connection((dominio, 443), timeout=10) as s:
+            with ctx_s.wrap_socket(s, server_hostname=dominio) as t:
+                return t.getpeercert()
+
+    cert = ctx.anim.esperar("negociando tls", leer, estilo="ondas")
+    if not cert:
+        ui.malo("no se pudo obtener el certificado")
+        return
+
+    datos = {"dominio": dominio}
+    ui.campo("emitido a", str(cert.get("subject")))
+    ui.campo("emitido por", str(cert.get("issuer")))
+    ui.campo("valido desde", cert.get("notBefore"))
+    ui.campo("valido hasta", cert.get("notAfter"))
+    datos["subject"] = str(cert.get("subject"))
+    datos["issuer"] = str(cert.get("issuer"))
+    datos["hasta"] = cert.get("notAfter")
+
+    san = []
+    for tipo, valor in cert.get("subjectAltName") or ():
+        if tipo == "DNS":
+            san.append(valor)
+    if san:
+        ui.sub("san (subdominios en el certificado)")
+        for s in sorted(set(san))[:40]:
+            ui.crudo("  " + Color.borde("├─ ") + Color.valor(s))
+        datos["san"] = sorted(set(san))
+
+    ui.sep()
+    ui.enlace("crtsh", "https://crt.sh/?q=" + dominio)
+    ctx.archivar("tls", dominio, datos)
+    ctx.emitir(datos)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  MOTOR · ASN / HASH / DORK / MAC
+# ══════════════════════════════════════════════════════════════════════════
+
+def cmd_asn(ctx, arg=None):
+    ui = ctx.ui
+    if not arg:
+        ui.malo("uso: asn <asn|ip>")
+        return
+    arg = str(arg).strip().upper().replace("AS", "")
+    if es_ip(arg):
+        cy = _asn_cymru(arg)
+        if not cy:
+            ui.malo("sin datos para esa ip")
+            return
+        ui.campo("prefijo", cy.get("prefijo"))
+        arg = str(cy.get("asn"))
+
+    ui.titulo("ASN · AS" + arg)
+    info = _asn_nombre(arg) or {}
+    d = ctx.red.json("https://api.bgpview.io/asn/" + arg) or {}
+    pre = ctx.red.json("https://api.bgpview.io/asn/" + arg + "/prefixes") or {}
+    bloque = d.get("data") or {}
+    ui.campo("nombre", info.get("nombre") or bloque.get("name") or "-")
+    ui.campo("pais", info.get("pais") or "-")
+    ui.campo("registro", info.get("registro") or "-")
+    v4 = (pre.get("data") or {}).get("ipv4_prefixes") or []
+    ui.campo("prefijos v4", len(v4))
+    for p in v4[:12]:
+        ui.crudo("  " + Color.borde("├─ ") + Color.valor(p.get("prefix", "")))
+    ui.sub("pivotes")
+    ui.enlace("bgp.tools", "https://bgp.tools/as/" + arg)
+    ui.enlace("he", "https://bgp.he.net/AS" + arg)
+    ui.sep()
+    datos = {"asn": arg, "nombre": info.get("nombre") or bloque.get("name"),
+             "pais": info.get("pais"), "prefijos": [p.get("prefix") for p in v4]}
+    ctx.archivar("asn", arg, datos)
+    ctx.emitir(datos)
+
+
+ALGOS = ("md5", "sha1", "sha256", "sha512", "sha3_256", "blake2b")
+
+
+def cmd_hash(ctx, texto=None):
+    ui = ctx.ui
+    if not texto:
+        ui.malo("uso: hash <texto|hash>")
+        return
+    ui.titulo("HASH · " + str(texto)[:40])
+    datos = {"entrada": str(texto), "hashes": {}}
+    limpio = str(texto).strip().lower()
+    es_hash = bool(re.fullmatch(r"[0-9a-f]{8,128}", limpio))
+
+    if not es_hash:
+        for a in ALGOS:
+            h = hashlib.new(a, str(texto).encode()).hexdigest()
+            datos["hashes"][a] = h
+            ui.campo(a, h)
+    else:
+        tipo = {32: "md5/ntlm", 40: "sha1", 64: "sha256", 96: "sha384",
+                128: "sha512"}.get(len(limpio), "desconocido")
+        ui.campo("identificado", tipo)
+        datos["identificado"] = tipo
+        ui.sub("lookups")
+        ui.enlace("crackstation", "https://crackstation.net/")
+        ui.enlace("md5decrypt", "https://md5decrypt.net/")
+        ui.enlace("hashes.com", "https://hashes.com/en/decrypt/hash")
+        ui.enlace("virustotal", "https://www.virustotal.com/gui/file/" + limpio)
+        if len(limpio) in (32, 40):
+            algo = "md5" if len(limpio) == 32 else "sha1"
+            r = ctx.red.json("https://hashlookup.circl.lu/lookup/%s/%s" % (algo, limpio))
+            if isinstance(r, dict) and r.get("FileName"):
+                ui.campo("circl", r.get("FileName"))
+                datos["circl"] = r.get("FileName")
+            else:
+                ui.info("circl sin coincidencia")
+    ui.sep()
+    ctx.archivar("hash", str(texto)[:40], datos)
+    ctx.emitir(datos)
+
+
+def cmd_dork(ctx, texto=None):
+    ui = ctx.ui
+    if not texto:
+        ui.malo("uso: dork <texto o dominio>")
+        return
+    texto = str(texto)
+    q = urllib.parse.quote
+    ui.titulo("DORKS · " + texto)
+    filas = []
+    for et, plantilla in DORKS_DEFECTO:
+        dk = plantilla.format(t=texto)
+        filas.append({"tipo": et, "dork": dk})
+        ui.enlace(et[:14], "https://www.google.com/search?q=" + q(dk))
+    for extra in ctx.config.get("dorks_personalizados", []) or []:
+        dk = str(extra).replace("{t}", texto)
+        filas.append({"tipo": "propio", "dork": dk})
+        ui.enlace("propio", "https://www.google.com/search?q=" + q(dk))
+    ui.sep()
+    ctx.archivar("dork", texto, {"dorks": filas})
+    ctx.emitir({"objetivo": texto, "dorks": filas})
+
+
+def cmd_mac(ctx, mac=None):
+    ui = ctx.ui
+    if not mac:
+        ui.malo("uso: mac aa:bb:cc:dd:ee:ff")
+        return
+    ui.titulo("MAC · " + str(mac))
+    code, cuerpo = ctx.red.get("https://api.macvendors.com/" + urllib.parse.quote(str(mac)))
+    fabricante = cuerpo.strip() if code == 200 else "no identificado"
+    ui.campo("fabricante", fabricante)
+    oui = re.sub(r"[^0-9A-Fa-f]", "", str(mac))[:6].upper()
+    ui.sub("pivotes")
+    ui.enlace("wigle", "https://wigle.net/search?netid=" + str(mac).upper())
+    ui.enlace("oui", "https://www.wireshark.org/tools/oui-lookup.html")
+    ui.enlace("mylnikov", "https://www.mylnikov.org/")
+    ui.sep()
+    ctx.archivar("mac", str(mac), {"mac": str(mac), "oui": oui, "fabricante": fabricante})
+    ctx.emitir({"mac": str(mac), "oui": oui, "fabricante": fabricante})
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  GRAB
+# ══════════════════════════════════════════════════════════════════════════
+
+RE_CORREO = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+RE_TEL = re.compile(r"(?:\+\d{1,3}[\s.\-]?)?(?:\(?\d{2,4}\)?[\s.\-]?){2,5}\d{2,4}")
+RE_REDES = {
+    "instagram": re.compile(r"instagram\.com/([A-Za-z0-9_.]{2,40})"),
+    "twitter": re.compile(r"(?:twitter|x)\.com/([A-Za-z0-9_]{2,20})"),
+    "facebook": re.compile(r"facebook\.com/([A-Za-z0-9_.]{2,50})"),
+    "linkedin": re.compile(r"linkedin\.com/(?:in|company)/([A-Za-z0-9_\-]{2,60})"),
+    "github": re.compile(r"github\.com/([A-Za-z0-9_\-]{2,40})"),
+    "tiktok": re.compile(r"tiktok\.com/@([A-Za-z0-9_.]{2,40})"),
+    "telegram": re.compile(r"t\.me/([A-Za-z0-9_]{3,40})"),
+    "youtube": re.compile(r"youtube\.com/(?:c/|channel/|@)([A-Za-z0-9_\-]{2,50})"),
+    "whatsapp": re.compile(r"wa\.me/(\d{7,15})"),
+}
+RE_JS = re.compile(r'src=["\']([^"\']+\.js[^"\']*)["\']', re.I)
+RE_COMENTARIO = re.compile(r"<!--(.*?)-->", re.S)
+RE_META = re.compile(r'<meta[^>]+(?:name|property)=["\']([^"\']+)["\'][^>]+'
+                     r'content=["\']([^"\']*)["\']', re.I)
+RE_TITULO = re.compile(r"<title[^>]*>(.*?)</title>", re.S | re.I)
+RE_GENERADOR = re.compile(r'<meta[^>]+name=["\']generator["\'][^>]+'
+                          r'content=["\']([^"\']+)["\']', re.I)
+
+
+def cmd_grab(ctx, url=None):
+    ui = ctx.ui
+    if not url:
+        ui.malo("uso: grab https://sitio.com")
+        return
+    url = str(url)
+    if not re.match(r"^https?://", url):
+        url = "https://" + url
+    host = urllib.parse.urlparse(url).netloc
+
+    ui.titulo("GRAB · " + url)
+    code, cuerpo = ctx.anim.esperar("descargando", lambda: ctx.red.get(url, cache=False),
+                                    estilo="remolino")
+    if code != 200 or not cuerpo:
+        ui.malo("no se pudo descargar (codigo %s)" % code)
+        return
+
+    datos = {"url": url, "host": host, "codigo": code}
+    titulo = RE_TITULO.search(cuerpo)
+    ui.campo("titulo", titulo.group(1).strip()[:120] if titulo else "-")
+    gen = RE_GENERADOR.search(cuerpo)
+    if gen:
+        ui.campo("generador", gen.group(1))
+
+    ui.sub("metadatos")
+    for nombre, valor in RE_META.findall(cuerpo)[:12]:
+        ui.campo(nombre[:16], valor[:80])
+        datos.setdefault("meta", {})[nombre] = valor
+
+    correos = sorted(set(RE_CORREO.findall(cuerpo)))
+    if correos:
+        ui.sub("correos · %d" % len(correos))
+        for c in correos[:20]:
+            ui.campo("·", c)
+        datos["correos"] = correos[:20]
+
+    telefonos = sorted({t.strip() for t in RE_TEL.findall(cuerpo)
+                        if len(re.sub(r"\D", "", t)) >= 8})[:15]
+    if telefonos:
+        ui.sub("telefonos")
+        for t in telefonos:
+            ui.campo("·", t)
+        datos["telefonos"] = telefonos
+
+    redes = {}
+    for red, patron in RE_REDES.items():
+        hallados = sorted(set(patron.findall(cuerpo)))
+        if hallados:
+            redes[red] = hallados[:8]
+    if redes:
+        ui.sub("perfiles sociales")
+        for red, cuentas in redes.items():
+            ui.campo(red, ", ".join(cuentas))
+        datos["redes"] = redes
+
+    js = sorted(set(RE_JS.findall(cuerpo)))[:15]
+    if js:
+        ui.sub("javascript")
+        for j in js:
+            ui.enlace("js", j[:100])
+        datos["js"] = js
+
+    comentarios = [c.strip()[:160] for c in RE_COMENTARIO.findall(cuerpo) if c.strip()][:10]
+    if comentarios:
+        ui.sub("comentarios html")
+        for c in comentarios:
+            ui.campo("·", c)
+        datos["comentarios"] = comentarios
+
+    ip = resolver(host)
+    if ip:
+        ui.campo("ip", ip)
+        datos["ip"] = ip
+
+    ui.sub("pivotes")
+    ui.enlace("urlscan", "https://urlscan.io/domain/" + host)
+    ui.enlace("wayback", "https://web.archive.org/web/*/" + url)
+    ui.enlace("builtwith", "https://builtwith.com/" + host)
+    ui.enlace("virustotal", "https://www.virustotal.com/gui/domain/" + host)
+    ui.sep()
+    ctx.archivar("grab", host, datos)
+    ctx.emitir(datos)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  SPAM
+# ══════════════════════════════════════════════════════════════════════════
+
+PLANTILLA_HTML = """<!DOCTYPE html>
+<html><body style="font-family:Arial,sans-serif;background:#f4f4f4;padding:24px">
+<div style="max-width:560px;margin:auto;background:#fff;border-radius:8px;
+padding:28px;border:1px solid #e2e2e2">
+<h2 style="color:#1a1a1a;margin:0 0 16px">{asunto}</h2>
+<div style="color:#333;font-size:15px;line-height:1.6">{cuerpo}</div>
+<p style="margin:24px 0">
+<a href="{url}" style="background:#2563eb;color:#fff;padding:12px 22px;
+border-radius:6px;text-decoration:none;display:inline-block">Acceder</a></p>
+<p style="color:#888;font-size:12px">Si el boton no funciona: {url}</p>
+</div>{pixel}</body></html>"""
+
+
+def _pixel():
+    return ('<img src="https://iplogger.org/1.png" width="1" height="1" '
+            'alt="" style="display:block">')
+
+
+def cmd_spam(ctx, destino=None):
+    ui = ctx.ui
+    cfg = ctx.config
+    if not destino:
+        ui.malo("uso: spam correo@destino.com [--asunto X] [--url Y]")
+        return
+    destino = str(destino).strip()
+    if not correo_valido(destino):
+        ui.malo("destino invalido")
+        return
+
+    host = cfg.get("spam_host")
+    puerto = int(cfg.get("spam_puerto"))
+    usuario = cfg.get("spam_usuario")
+    clave = cfg.get("spam_clave")
+    remitente = cfg.get("spam_de") or usuario
+
+    if not usuario or not clave:
+        ui.malo("configura primero: config spam_usuario / config spam_clave")
+        return
+
+    asunto = ctx.flags.get("asunto") or cfg.get("spam_asunto")
+    url = ctx.flags.get("url") or "https://" + host
+    cuerpo_txt = cfg.get("spam_cuerpo").replace("{url}", url)
+
+    ui.titulo("SPAM · " + destino)
+    ui.campo("servidor", "%s:%s" % (host, puerto))
+    ui.campo("de", remitente)
+    ui.campo("asunto", asunto)
+    ui.campo("url", url)
+    ui.sep()
+
+    msg = EmailMessage()
+    msg["From"] = remitente
+    msg["To"] = destino
+    msg["Subject"] = asunto
+    msg["Message-ID"] = make_msgid()
+    msg.set_content(cuerpo_txt)
+    if cfg.get("spam_html", True):
+        html = PLANTILLA_HTML.format(
+            asunto=asunto, cuerpo=cuerpo_txt.replace("\n", "<br>"),
+            url=url, pixel=_pixel() if cfg.get("spam_pixel", True) else "")
+        msg.add_alternative(html, subtype="html")
+
+    def enviar():
+        try:
+            if cfg.get("spam_ssl", False):
+                s = smtplib.SMTP_SSL(host, puerto, timeout=25)
+            else:
+                s = smtplib.SMTP(host, puerto, timeout=25)
+                if cfg.get("spam_inicio", True):
+                    s.starttls(context=ssl.create_default_context())
+            s.login(usuario, clave)
+            s.send_message(msg)
+            s.quit()
+            return True
+        except Exception as e:
+            return str(e)
+
+    r = ctx.anim.esperar("enviando", enviar, estilo="sobre")
+    if r is True:
+        ui.ok("enviado a " + destino)
+        datos = {"destino": destino, "asunto": asunto, "url": url, "ok": True}
+    else:
+        ui.malo("fallo: %s" % r)
+        datos = {"destino": destino, "asunto": asunto, "url": url, "error": str(r)}
+    ui.sep()
+    ctx.archivar("spam", destino, datos)
+    ctx.emitir(datos)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  CONFIG
+# ══════════════════════════════════════════════════════════════════════════
+
+def cmd_config(ctx, arg=None, valor=None):
+    ui = ctx.ui
+    cfg = ctx.config
+    if not arg:
+        ui.titulo("CONFIGURACION")
+        for k in sorted(POR_DEFECTO):
+            v = cfg.get(k)
+            if k in CLAVES_SECRETAS:
+                v = ("*" * 10 + v[-4:]) if v else "(vacio)"
+            ui.campo(k, v)
+        ui.sep()
+        ui.info("config <clave> <valor>   |   config <clave> borrar")
+        return
+
+    clave = str(arg).strip().lower()
+    if valor is None:
+        ui.campo(clave, cfg.get(clave, "(no existe)"))
+        return
+    if str(valor).lower() == "borrar":
+        valor = ""
+    ok, msg = cfg.set(clave, valor)
+    if not ok:
+        ui.malo(msg)
+        return
+    cfg.guardar()
+    ui.ok("%s = %s" % (clave, "*" * 8 if clave in CLAVES_SECRETAS and valor else valor))
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  DOCTOR / INSTALL / UPDATE
+# ══════════════════════════════════════════════════════════════════════════
+
+def cmd_doctor(ctx, _=None):
+    ui = ctx.ui
+    ui.titulo("DIAGNOSTICO")
+    pruebas = [
+        ("python >= 3.8", lambda: sys.version_info >= (3, 8)),
+        ("dns.google", lambda: ctx.red.get("https://dns.google/resolve?name="
+                                           "example.com&type=A")[0] == 200),
+        ("ip-api.com", lambda: ctx.red.get("http://ip-api.com/json/8.8.8.8")[0] == 200),
+        ("internetdb shodan", lambda: ctx.red.get("https://internetdb.shodan.io/8.8.8.8")[0] == 200),
+        ("rdap.org", lambda: ctx.red.get("https://rdap.org/ip/8.8.8.8")[0] == 200),
+        ("crt.sh", lambda: ctx.red.get("https://crt.sh/?q=example.com&output=json")[0] == 200),
+        ("phonenumbers", lambda: HAY_FONO),
+        ("cryptography", lambda: HAY_CRIPTO),
+        ("carpeta de trabajo", lambda: os.access(DIR_BASE, os.W_OK)),
+        ("escritura dossier", lambda: _prueba_dossier()),
+        ("smtp configurado", lambda: bool(ctx.config.get("spam_usuario"))),
+    ]
+    fallos = 0
+    for nombre, fn in pruebas:
+        try:
+            ok = bool(fn())
+        except Exception:
+            ok = False
+        if ok:
+            ui.ok(nombre)
+        else:
+            ui.malo(nombre)
+            fallos += 1
+    ui.sep()
+    if fallos == 0:
+        ui.ok("todo en orden")
+    else:
+        ui.aviso("%d comprobaciones fallidas" % fallos)
+        if not HAY_FONO:
+            ui.info("python3 -m pip install phonenumbers")
+        if not HAY_CRIPTO:
+            ui.info("python3 -m pip install cryptography")
+
+
+def _prueba_dossier():
+    os.makedirs(RUTA_DOSSIERS, exist_ok=True)
+    ruta = os.path.join(RUTA_DOSSIERS, ".prueba")
+    with open(ruta, "w") as f:
+        f.write("x")
+    os.remove(ruta)
+    return True
+
+
+def cmd_install(ctx, _=None):
+    ui = ctx.ui
+    ui.titulo("INSTALAR EXTRAS")
+    paquetes = []
+    if not HAY_FONO:
+        paquetes.append("phonenumbers")
+    if not HAY_CRIPTO:
+        paquetes.append("cryptography")
+    if not paquetes:
+        ui.ok("no falta nada")
+        return
+    ui.info("paquetes: " + ", ".join(paquetes))
+    ui.info("python3 -m pip install " + " ".join(paquetes))
+    if input("  ¿ejecutar ahora? [s/N] ").strip().lower() != "s":
+        return
+    try:
+        subprocess.check_call([sys.executable, "-m", "pip", "install"] + paquetes)
+        ui.ok("listo, reinicia jero")
+    except Exception as e:
+        ui.malo("fallo: %s" % e)
+
+
+def cmd_update(ctx, _=None):
+    ui = ctx.ui
+    ui.titulo("ACTUALIZAR")
+    code, cuerpo = ctx.red.get(URL_ACTUALIZACION, cache=False)
+    if code != 200 or len(cuerpo) < 2000:
+        ui.malo("no se pudo descargar la version nueva")
+        return
+    ruta = os.path.abspath(__file__)
+    respaldo = ruta + ".bak"
+    shutil.copy2(ruta, respaldo)
+    with open(ruta, "w", encoding="utf-8") as f:
+        f.write(cuerpo)
+    ui.ok("actualizado (respaldo en %s)" % respaldo)
+    ui.info("reinicia jero")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  HISTORIAL / AYUDA
+# ══════════════════════════════════════════════════════════════════════════
+
+def guardar_historial(linea):
+    try:
+        os.makedirs(DIR_BASE, exist_ok=True)
+        with open(RUTA_HISTORIAL, "a", encoding="utf-8") as f:
+            f.write("%s\t%s\n" % (ahora(), linea))
+    except Exception:
+        pass
+
+
+def cmd_historial(ctx, _=None):
+    ui = ctx.ui
+    if not os.path.exists(RUTA_HISTORIAL):
+        ui.info("sin historial")
+        return
+    with open(RUTA_HISTORIAL, "r", encoding="utf-8", errors="replace") as f:
+        lineas = f.readlines()[-40:]
+    ui.titulo("HISTORIAL")
+    for l in lineas:
+        ui.crudo("  " + Color.tenue(l.rstrip()))
+
+
+AYUDA = """
+  COMANDOS
+  ────────────────────────────────────────────────────────────────
+  ip      <ip|dominio>        geo, asn, reputacion, puertos, riesgo
+  phone   <numero>            validacion, area, red, señales, dorks
+  user    <nick>              enumeracion en 95 plataformas
+  mail    <correo>            mx, spf, registro, brechas, gravatar
+  domain  <dominio>           subdominios crt.sh, dns, urlscan
+  whois   <dominio|ip>        rdap completo
+  dns     <dominio>           registros a/aaaa/mx/ns/txt/soa/caa
+  tls     <dominio>           certificado y subdominios (san)
+  grab    <url>               metadatos, correos, redes, js, comentarios
+  spam    <correo>            envio smtp html con pixel
+  hash    <texto|hash>        generar hashes o identificar y buscar
+  dork    <texto>             14 dorks listos
+  mac     <mac>               fabricante oui
+  config  [clave] [valor]     ver y ajustar
+  doctor                      diagnostico de red y entorno
+  install                     instalar extras opcionales
+  update                      actualizar desde el repositorio
+  historial                   ultimas consultas
+  limpiar                     limpiar pantalla
+  salir                       terminar
+
+  FLAGS
+  ────────────────────────────────────────────────────────────────
+  --json          volcar resultado en json
+  --no-archivo    no guardar dossier
+  --asunto X      asunto para spam
+  --url X         url del cta para spam
+
+  ATAJOS: i · ph · u · m · d · w · dk · t · g · s · h · c · q
+"""
+
+
+def cmd_ayuda(ctx, _=None):
+    print(AYUDA)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  BANNER / DESPACHO
+# ══════════════════════════════════════════════════════════════════════════
+
+BANNER = r"""
+        ██╗███████╗██████╗  ██████╗
+        ██║██╔════╝██╔══██╗██╔═══██╗
+        ██║█████╗  ██████╔╝██║   ██║
+   ██   ██║██╔══╝  ██╔══██╗██║   ██║
+   ╚█████╔╝███████╗██║  ██║╚██████╔╝
+    ╚════╝ ╚══════╝╚═╝  ╚═╝ ╚═════╝
+"""
+
+
+def cmd_banner(ctx):
+    ui = ctx.ui
+    for linea in BANNER.strip("\n").splitlines():
+        ui.crudo(Color.borde(linea))
+    ui.crudo("   " + Color.etiqueta("v%s · %s · navaja osint" % (VER, AUTOR)))
+    ui.crudo("   " + Color.tenue("%d comandos · %d sitios · sin api keys"
+                                 % (len(COMANDOS), len(SITIOS))))
+    ui.sep()
+
+
+COMANDOS = {
+    "ip": cmd_ip, "phone": cmd_phone, "user": cmd_user, "mail": cmd_mail,
+    "domain": cmd_domain, "whois": cmd_whois, "dns": cmd_dns, "tls": cmd_tls,
+    "grab": cmd_grab, "spam": cmd_spam, "hash": cmd_hash, "dork": cmd_dork,
+    "mac": cmd_mac, "config": cmd_config, "doctor": cmd_doctor,
+    "install": cmd_install, "update": cmd_update, "historial": cmd_historial,
+    "ayuda": cmd_ayuda, "help": cmd_ayuda, "banner": cmd_banner,
+}
+
+ALIAS = {
+    "i": "ip", "ip": "ip", "geo": "ip", "ipinfo": "ip",
+    "ph": "phone", "phone": "phone", "fono": "phone", "tel": "phone",
+    "numero": "phone", "phoneinfoga": "phone",
+    "u": "user", "user": "user", "nick": "user", "usuario": "user",
+    "enumerar": "user", "probe": "user", "sherlock": "user", "maigret": "user",
+    "m": "mail", "mail": "mail", "email": "mail", "correo": "mail",
+    "d": "domain", "domain": "domain", "dominio": "domain", "subdominios": "domain",
+    "w": "whois", "whois": "whois",
+    "dk": "dns", "dns": "dns",
+    "t": "tls", "tls": "tls", "ssl": "tls", "cert": "tls",
+    "g": "grab", "grab": "grab", "web": "grab", "scrape": "grab",
+    "s": "spam", "spam": "spam", "smtp": "spam",
+    "h": "hash", "hash": "hash", "hashid": "hash",
+    "dork": "dork", "dorks": "dork",
+    "mac": "mac",
+    "c": "config", "config": "config", "set": "config",
+    "doctor": "doctor", "diag": "doctor",
+    "install": "install", "update": "update",
+    "historial": "historial", "hist": "historial",
+    "q": "salir", "salir": "salir", "exit": "salir", "quit": "salir",
+    "ayuda": "ayuda", "help": "ayuda", "?": "ayuda",
+    "limpiar": "limpiar", "clear": "limpiar", "cls": "limpiar",
+    "banner": "banner",
+}
+
+FLAGS_CON_VALOR = {"asunto", "url"}
+
+
+def partir(linea):
+    partes = []
+    actual = ""
+    comillas = None
+    for c in linea:
+        if comillas:
+            if c == comillas:
+                comillas = None
+            else:
+                actual += c
+        elif c in "\"'":
+            comillas = c
+        elif c.isspace():
+            if actual:
+                partes.append(actual)
+                actual = ""
+        else:
+            actual += c
+    if actual:
+        partes.append(actual)
+    return partes
+
+
+def ejecutar(ctx, linea):
+    partes = partir(linea)
+    if not partes:
+        return True
+    objetivo = partes[0].lower()
+
+    flags = {}
+    resto = []
+    i = 1
+    while i < len(partes):
+        p = partes[i]
+        if p.startswith("--"):
+            nombre = p[2:].lower()
+            if nombre in FLAGS_CON_VALOR and i + 1 < len(partes):
+                flags[nombre] = partes[i + 1]
+                i += 2
+                continue
+            flags[nombre.replace("-", "_")] = True
+            i += 1
+            continue
+        resto.append(p)
+        i += 1
+    ctx.flags = flags
+
+    comando = ALIAS.get(objetivo)
+    if not comando:
+        ctx.ui.malo("comando desconocido: %s" % objetivo)
+        ctx.ui.info("escribe ayuda")
+        return True
+
+    if comando == "salir":
+        return False
+    if comando == "limpiar":
+        os.system("cls" if os.name == "nt" else "clear")
+        cmd_banner(ctx)
+        return True
+    if comando == "banner":
+        cmd_banner(ctx)
+        return True
+
+    argumento = " ".join(resto) if resto else None
+    funcion = COMANDOS.get(comando)
+    if not funcion:
+        ctx.ui.malo("no implementado")
+        return True
+    try:
+        funcion(ctx, argumento)
+    except KeyboardInterrupt:
+        ctx.ui.aviso("interrumpido")
+    except Exception as e:
+        ctx.ui.malo("error: %s" % e)
+    return True
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  MAIN
+# ══════════════════════════════════════════════════════════════════════════
+
+def main():
+    os.makedirs(DIR_BASE, exist_ok=True)
+    os.makedirs(RUTA_DOSSIERS, exist_ok=True)
+    config = Config()
+    ui = UI(config)
+    red = Red(config)
+    anim = Anim(config, ui)
+    ctx = Contexto(config, ui, red, anim, {})
+
+    argumentos = sys.argv[1:]
+    if argumentos:
+        ui.silencio = False
+        cmd_banner(ctx)
+        ejecutar(ctx, " ".join(argumentos))
+        return
+
+    cmd_banner(ctx)
+    ui.info("escribe 'ayuda' para ver los comandos")
+    while True:
+        try:
+            linea = input(Color.borde("jero") + Color.tenue(" › ") + " ").strip()
+        except (EOFError, KeyboardInterrupt):
+            ui.crudo()
+            ui.info("hasta luego")
+            break
+        if not linea:
+            continue
+        guardar_historial(linea)
+        if not ejecutar(ctx, linea):
+            ui.info("hasta luego")
+            break
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print()
+    except Exception as error:
+        print("\n  [-] error fatal: %s" % error)
+        raise SystemExit(1)
